@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from vecstash.chunking import chunk_document
 from vecstash.config import (
     AppConfig,
     KNOWN_GOOD_MODELS,
@@ -12,6 +13,7 @@ from vecstash.config import (
     load_config,
     validate_model_reference,
 )
+from vecstash.embedder import Embedder
 from vecstash.extraction import extract_files
 from vecstash.logging_utils import configure_logging, get_logger
 from vecstash.storage import StorageManager
@@ -75,8 +77,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit extraction results as JSON list.",
     )
 
+    search_parser = subparsers.add_parser("search", help="Run semantic similarity search.")
+    search_parser.add_argument("query", help="Natural language search query.")
+    search_parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Number of results to return (default: 5).",
+    )
+    search_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit results as JSON.",
+    )
+
     for name, help_text in (
-        ("search", "Run semantic search query (placeholder)."),
         ("reindex", "Rebuild local vector index (placeholder)."),
         ("doctor", "Run local diagnostics checks (placeholder)."),
     ):
@@ -175,11 +191,16 @@ def _models_bootstrap(config: AppConfig, as_json: bool) -> int:
 
 def _ingest_extract(config: AppConfig, inputs: list[Path], as_json: bool) -> int:
     storage = StorageManager(config)
+    embedder = Embedder(config)
     try:
         storage.initialize()
         docs = extract_files(inputs)
         for doc in docs:
             storage.upsert_document_metadata(doc)
+            chunks = chunk_document(doc)
+            if chunks:
+                embeddings = embedder.embed([c.text for c in chunks])
+                storage.upsert_chunks(doc, chunks, embeddings)
     finally:
         storage.close()
     payload = [
@@ -212,6 +233,46 @@ def _ingest_extract(config: AppConfig, inputs: list[Path], as_json: bool) -> int
     return 0
 
 
+def _search(config: AppConfig, query: str, limit: int, as_json: bool) -> int:
+    embedder = Embedder(config)
+    query_vector = embedder.embed([query])[0]
+    storage = StorageManager(config)
+    try:
+        storage.initialize()
+        results = storage.search(query_vector, top_k=limit)
+    finally:
+        storage.close()
+
+    if as_json:
+        print(
+            json.dumps(
+                [
+                    {
+                        "score": r.score,
+                        "source_path": r.source_path,
+                        "chunk_index": r.chunk_index,
+                        "chunk_text": r.chunk_text,
+                    }
+                    for r in results
+                ],
+                indent=2,
+            )
+        )
+        return 0
+
+    if not results:
+        print("No results found.")
+        return 0
+
+    for r in results:
+        filename = Path(r.source_path).name
+        print(f"score: {r.score:.4f}  {filename}")
+        print("-" * 40)
+        print(r.chunk_text)
+        print()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config(args.config)
@@ -229,6 +290,8 @@ def main(argv: list[str] | None = None) -> int:
             return _models_bootstrap(config, as_json=args.json)
     if args.command == "ingest":
         return _ingest_extract(config=config, inputs=args.inputs, as_json=args.json)
+    if args.command == "search":
+        return _search(config=config, query=args.query, limit=args.limit, as_json=args.json)
 
     logger.info(
         "command_not_implemented",
