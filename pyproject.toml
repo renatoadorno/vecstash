@@ -1,0 +1,42 @@
+[project]
+name = "vecstash"
+version = "0.1.0"
+description = "Offline semantic storage and search for macOS ARM"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    { name = "Renato Adorno", email = "renattoadorno@gmail.com" },
+]
+keywords = ["embeddings", "semantic-search", "mlx", "apple-silicon", "offline", "vector-store"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Indexing",
+]
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "markdown-it-py>=4.0.0",
+    "mlx-embeddings>=0.0.5",
+    "pypdf>=6.9.1",
+    "qdrant-client>=1.17.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/renatoadorno/vecstash"
+Repository = "https://github.com/renatoadorno/vecstash"
+Issues = "https://github.com/renatoadorno/vecstash/issues"
+
+[project.scripts]
+vecstash = "vecstash.cli:main"
+vecstash-daemon = "vecstash.daemon:main"
+
+[build-system]
+requires = ["uv_build>=0.10.5,<0.11.0"]
+build-backend = "uv_build"
