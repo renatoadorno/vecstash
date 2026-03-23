@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-import argparse
-import json
+import json as json_module
 import sys
 from pathlib import Path
+from typing import Annotated, Optional
+
+import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 from vecstash.chunking import chunk_document
 from vecstash.config import (
-    AppConfig,
     KNOWN_GOOD_MODELS,
     SUPPORTED_MODEL_ARCHITECTURES,
+    AppConfig,
     load_config,
     validate_model_reference,
 )
@@ -19,108 +24,48 @@ from vecstash.logging_utils import configure_logging, get_logger
 from vecstash.storage import StorageManager
 from vecstash.updater import check_for_update, download_and_install
 
+app = typer.Typer(no_args_is_help=True, pretty_exceptions_short=True)
+models_app = typer.Typer(no_args_is_help=True, help="Inspect and manage MLX models.")
+app.add_typer(models_app, name="models")
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="vecstash",
-        description="Offline semantic storage and search for macOS ARM.",
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        help="Path to config.toml (defaults to ~/.vecstash/config.toml).",
-    )
-
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    status_parser = subparsers.add_parser("status", help="Show local configuration status.")
-    status_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit status in JSON format.",
-    )
-
-    models_parser = subparsers.add_parser("models", help="Inspect and validate MLX model settings.")
-    models_sub = models_parser.add_subparsers(dest="models_command", required=True)
-    models_sub.add_parser("show", help="Show configured model and supported architecture families.")
-    validate_parser = models_sub.add_parser(
-        "validate",
-        help="Validate configured model (local cache only with --offline-only).",
-    )
-    validate_parser.add_argument(
-        "--offline-only",
-        action="store_true",
-        help="Require model to be already available in local cache.",
-    )
-    bootstrap_parser = models_sub.add_parser(
-        "bootstrap",
-        help="Force model download/resolution now so later runtime can be offline.",
-    )
-    bootstrap_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit bootstrap status in JSON format.",
-    )
-
-    ingest_parser = subparsers.add_parser(
-        "ingest",
-        help="Extract, chunk, and index documents with vector embeddings.",
-    )
-    ingest_parser.add_argument(
-        "inputs",
-        nargs="+",
-        type=Path,
-        help="Files to ingest (.txt, .md, .html, .pdf).",
-    )
-    ingest_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit extraction results as JSON list.",
-    )
-
-    search_parser = subparsers.add_parser("search", help="Run semantic similarity search.")
-    search_parser.add_argument("query", help="Natural language search query.")
-    search_parser.add_argument(
-        "--limit",
-        type=int,
-        default=5,
-        metavar="N",
-        help="Number of results to return (default: 5).",
-    )
-    search_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit results as JSON.",
-    )
-
-    update_parser = subparsers.add_parser(
-        "update",
-        help="Check for and install updates from GitHub.",
-    )
-    update_parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Only check if an update is available, don't install.",
-    )
-    update_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit result as JSON.",
-    )
-
-    for name, help_text in (
-        ("reindex", "Rebuild local vector index (placeholder)."),
-        ("doctor", "Run local diagnostics checks (placeholder)."),
-    ):
-        subparsers.add_parser(name, help=help_text)
-
-    return parser
+console = Console(stderr=True)
 
 
-def _print_status(config: AppConfig, as_json: bool) -> int:
+class _State:
+    config: AppConfig | None = None
+    config_path: Path | None = None
+
+
+_state = _State()
+
+
+@app.callback()
+def _main_callback(
+    config: Annotated[Optional[Path], typer.Option("--config", help="Path to config.toml.")] = None,
+):
+    """Offline semantic storage and search for macOS ARM."""
+    _state.config_path = config
+
+
+def _get_config() -> AppConfig:
+    if _state.config is None:
+        _state.config = load_config(_state.config_path)
+        configure_logging(_state.config.paths.log_path)
+    return _state.config
+
+
+# ── status ────────────────────────────────────────────────────────────
+
+
+@app.command()
+def status(
+    json: Annotated[bool, typer.Option("--json", help="Emit as JSON.")] = False,
+):
+    """Show local configuration and storage status."""
+    config = _get_config()
     storage = StorageManager(config)
     storage.initialize()
-    storage_status = storage.status()
+    ss = storage.status()
     storage.close()
 
     payload = {
@@ -136,53 +81,79 @@ def _print_status(config: AppConfig, as_json: bool) -> int:
         "max_concurrency": config.runtime.max_concurrency,
         "query_cache_size": config.runtime.query_cache_size,
         "preload_on_start": config.model.preload_on_start,
-        "schema_version": storage_status.schema_version,
-        "qdrant_collection": storage_status.collection_name,
-        "qdrant_points_count": storage_status.points_count,
-        "documents_count": storage_status.documents_count,
+        "schema_version": ss.schema_version,
+        "qdrant_collection": ss.collection_name,
+        "qdrant_points_count": ss.points_count,
+        "documents_count": ss.documents_count,
     }
-    if as_json:
-        print(json.dumps(payload))
-        return 0
+    if json:
+        print(json_module.dumps(payload))
+        raise typer.Exit()
 
-    print("vecstash status")
+    table = Table(title="vecstash status", show_header=False)
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
     for key, value in payload.items():
-        print(f"- {key}: {value}")
-    return 0
+        table.add_row(key, str(value))
+    console.print(table)
 
 
-def _models_show(config: AppConfig) -> int:
-    print("Configured model")
-    print(f"- model.name: {config.model.name}")
-    print(f"- model.cache_dir: {config.model.cache_dir}")
-    print(f"- model.preload_on_start: {config.model.preload_on_start}")
-    print("Supported architecture families (mlx_embeddings):")
+# ── models ────────────────────────────────────────────────────────────
+
+
+@models_app.command("show")
+def models_show():
+    """Show configured model and supported architecture families."""
+    config = _get_config()
+
+    table = Table(title="Configured model", show_header=False)
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
+    table.add_row("model.name", config.model.name)
+    table.add_row("model.cache_dir", str(config.model.cache_dir))
+    table.add_row("model.preload_on_start", str(config.model.preload_on_start))
+    console.print(table)
+
+    arch_table = Table(title="Supported architectures")
+    arch_table.add_column("Family", style="green")
     for item in SUPPORTED_MODEL_ARCHITECTURES:
-        print(f"- {item}")
-    print("Known good model IDs (examples):")
+        arch_table.add_row(item)
+    console.print(arch_table)
+
+    models_table = Table(title="Known good models")
+    models_table.add_column("Model ID", style="dim")
     for model in KNOWN_GOOD_MODELS:
-        print(f"- {model}")
-    return 0
+        models_table.add_row(model)
+    console.print(models_table)
 
 
-def _models_validate(config: AppConfig, offline_only: bool) -> int:
+@models_app.command("validate")
+def models_validate(
+    offline_only: Annotated[bool, typer.Option("--offline-only", help="Require local cache.")] = False,
+):
+    """Validate configured model reference."""
+    config = _get_config()
     ok, detail = validate_model_reference(
         model_name=config.model.name,
         cache_dir=config.model.cache_dir,
         offline_only=offline_only,
     )
-    payload = {
+    print(json_module.dumps({
         "model_name": config.model.name,
         "cache_dir": str(config.model.cache_dir),
         "offline_only": offline_only,
         "ok": ok,
         "detail": detail,
-    }
-    print(json.dumps(payload))
-    return 0 if ok else 2
+    }))
+    raise typer.Exit(code=0 if ok else 2)
 
 
-def _models_bootstrap(config: AppConfig, as_json: bool) -> int:
+@models_app.command("bootstrap")
+def models_bootstrap(
+    json: Annotated[bool, typer.Option("--json", help="Emit as JSON.")] = False,
+):
+    """Download model to local cache for offline use."""
+    config = _get_config()
     ok, detail = validate_model_reference(
         model_name=config.model.name,
         cache_dir=config.model.cache_dir,
@@ -194,18 +165,32 @@ def _models_bootstrap(config: AppConfig, as_json: bool) -> int:
         "ok": ok,
         "detail": detail,
     }
-    if as_json:
-        print(json.dumps(payload))
-    else:
-        status = "ok" if ok else "error"
-        print(f"bootstrap status: {status}")
-        print(f"- model: {config.model.name}")
-        print(f"- cache_dir: {config.model.cache_dir}")
-        print(f"- detail: {detail}")
-    return 0 if ok else 2
+    if json:
+        print(json_module.dumps(payload))
+        raise typer.Exit(code=0 if ok else 2)
+
+    table = Table(title="Bootstrap status", show_header=False)
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
+    status_style = "green" if ok else "red"
+    table.add_row("status", f"[{status_style}]{'ok' if ok else 'error'}[/{status_style}]")
+    table.add_row("model", config.model.name)
+    table.add_row("cache_dir", str(config.model.cache_dir))
+    table.add_row("detail", detail)
+    console.print(table)
+    raise typer.Exit(code=0 if ok else 2)
 
 
-def _ingest_extract(config: AppConfig, inputs: list[Path], as_json: bool) -> int:
+# ── ingest ────────────────────────────────────────────────────────────
+
+
+@app.command()
+def ingest(
+    inputs: Annotated[list[Path], typer.Argument(help="Files to ingest (.txt, .md, .html, .pdf).")],
+    json: Annotated[bool, typer.Option("--json", help="Emit as JSON.")] = False,
+):
+    """Extract, chunk, and index documents with vector embeddings."""
+    config = _get_config()
     logger = get_logger(__name__)
     embedder = Embedder(config)
     storage = StorageManager(config)
@@ -224,9 +209,12 @@ def _ingest_extract(config: AppConfig, inputs: list[Path], as_json: bool) -> int
                         "embedding_failed",
                         extra={"event": "embedding_failed", "source_path": str(doc.source_path)},
                     )
-                    print(f"Warning: vector indexing failed for {doc.source_path}, metadata saved.", file=sys.stderr)
+                    console.print(
+                        f"[yellow]Warning:[/yellow] vector indexing failed for {doc.source_path}, metadata saved."
+                    )
     finally:
         storage.close()
+
     payload = [
         {
             "document_id": doc.document_id,
@@ -238,144 +226,144 @@ def _ingest_extract(config: AppConfig, inputs: list[Path], as_json: bool) -> int
     ]
     logger.info(
         "ingest_complete",
-        extra={
-            "event": "ingest_complete",
-            "count": len(docs),
-            "model_name": config.model.name,
-        },
+        extra={"event": "ingest_complete", "count": len(docs), "model_name": config.model.name},
     )
 
-    if as_json:
-        print(json.dumps(payload))
-        return 0
+    if json:
+        print(json_module.dumps(payload))
+        raise typer.Exit()
 
-    print("Ingest summary")
+    table = Table(title="Ingest summary")
+    table.add_column("File", style="cyan")
+    table.add_column("Kind")
+    table.add_column("Document ID", style="dim")
     for item in payload:
-        print(f"- {item['source_path']} [{item['source_kind']}] -> id={item['document_id']}")
-    return 0
+        table.add_row(
+            Path(item["source_path"]).name,
+            item["source_kind"],
+            item["document_id"][:16] + "...",
+        )
+    console.print(table)
 
 
-def _search(config: AppConfig, query: str, limit: int, as_json: bool) -> int:
+# ── search ────────────────────────────────────────────────────────────
+
+
+@app.command()
+def search(
+    query: Annotated[str, typer.Argument(help="Natural language search query.")],
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Number of results.")] = 5,
+    json: Annotated[bool, typer.Option("--json", help="Emit as JSON.")] = False,
+):
+    """Run semantic similarity search."""
+    config = _get_config()
     embedder = Embedder(config)
     query_vector = embedder.embed([query])[0]
     storage = StorageManager(config)
     try:
         storage.initialize(vector_size=embedder.vector_size)
         if storage.status().points_count == 0:
-            print("No documents indexed yet. Run 'vecstash ingest <files>' first.")
-            return 1
+            console.print("[yellow]No documents indexed yet. Run 'vecstash ingest <files>' first.[/yellow]")
+            raise typer.Exit(code=1)
         results = storage.search(query_vector, top_k=limit)
     finally:
         storage.close()
 
-    if as_json:
-        print(
-            json.dumps(
-                [
-                    {
-                        "score": r.score,
-                        "document_id": r.document_id,
-                        "source_path": r.source_path,
-                        "chunk_index": r.chunk_index,
-                        "chunk_text": r.chunk_text,
-                    }
-                    for r in results
-                ],
-                indent=2,
-            )
-        )
-        return 0
+    if json:
+        print(json_module.dumps(
+            [
+                {
+                    "score": r.score,
+                    "document_id": r.document_id,
+                    "source_path": r.source_path,
+                    "chunk_index": r.chunk_index,
+                    "chunk_text": r.chunk_text,
+                }
+                for r in results
+            ],
+            indent=2,
+        ))
+        raise typer.Exit()
 
     if not results:
-        print("No results found.")
-        return 0
+        console.print("[yellow]No results found.[/yellow]")
+        raise typer.Exit()
 
     for r in results:
         filename = Path(r.source_path).name
-        print(f"score: {r.score:.4f}  {filename}")
-        print("-" * 40)
-        print(r.chunk_text)
-        print()
-    return 0
+        score_color = "green" if r.score > 0.8 else "yellow" if r.score > 0.5 else "red"
+        title = f"[{score_color}]{r.score:.4f}[/{score_color}]  {filename}"
+        console.print(Panel(r.chunk_text, title=title, border_style="dim"))
 
 
-def _update(check_only: bool, as_json: bool) -> int:
+# ── update ────────────────────────────────────────────────────────────
+
+
+@app.command()
+def update(
+    check: Annotated[bool, typer.Option("--check", help="Only check, don't install.")] = False,
+    json: Annotated[bool, typer.Option("--json", help="Emit as JSON.")] = False,
+):
+    """Check for and install updates from GitHub."""
     try:
         info = check_for_update()
     except RuntimeError as e:
-        if as_json:
-            print(json.dumps({"error": str(e)}))
+        if json:
+            print(json_module.dumps({"error": str(e)}))
         else:
-            print(f"Error: {e}", file=sys.stderr)
-        return 1
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
 
-    if as_json:
-        print(json.dumps({
+    if json:
+        print(json_module.dumps({
             "current_version": info.current_version,
             "latest_version": info.latest_version,
             "update_available": info.update_available,
             "release_url": info.release_url,
         }))
-        if not info.update_available or check_only:
-            return 0
+        if not info.update_available or check:
+            raise typer.Exit()
     else:
         if not info.update_available:
-            print(f"Already up to date (v{info.current_version}).")
-            return 0
+            console.print(f"[green]Already up to date[/green] (v{info.current_version}).")
+            raise typer.Exit()
 
-        print(f"New version available: v{info.current_version} → v{info.latest_version}")
+        console.print(
+            f"New version available: v{info.current_version} → [green]v{info.latest_version}[/green]"
+        )
+        if check:
+            raise typer.Exit()
 
-        if check_only:
-            return 0
-
-    print(f"Downloading and installing v{info.latest_version}...")
+    console.print(f"Downloading and installing v{info.latest_version}...")
     try:
         download_and_install(info)
     except RuntimeError as e:
-        if as_json:
-            print(json.dumps({"error": str(e)}))
+        if json:
+            print(json_module.dumps({"error": str(e)}))
         else:
-            print(f"Error: {e}", file=sys.stderr)
-        return 1
+            console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
 
-    print(f"Updated to v{info.latest_version}.")
-    return 0
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-
-    if args.command == "update":
-        return _update(check_only=args.check, as_json=args.json)
-
-    config = load_config(args.config)
-    configure_logging(config.paths.log_path)
-    logger = get_logger(__name__)
-
-    if args.command == "status":
-        return _print_status(config, as_json=args.json)
-    if args.command == "models":
-        if args.models_command == "show":
-            return _models_show(config)
-        if args.models_command == "validate":
-            return _models_validate(config, offline_only=args.offline_only)
-        if args.models_command == "bootstrap":
-            return _models_bootstrap(config, as_json=args.json)
-    if args.command == "ingest":
-        return _ingest_extract(config=config, inputs=args.inputs, as_json=args.json)
-    if args.command == "search":
-        return _search(config=config, query=args.query, limit=args.limit, as_json=args.json)
-
-    logger.info(
-        "command_not_implemented",
-        extra={
-            "command": args.command,
-            "detail": "Command scaffold is ready; implementation will follow next phases.",
-        },
-    )
-    print(f"Command '{args.command}' is scaffolded and will be implemented in upcoming phases.")
-    return 0
+    console.print(f"[green]Updated to v{info.latest_version}.[/green]")
 
 
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+# ── scaffolded ────────────────────────────────────────────────────────
+
+
+@app.command()
+def reindex():
+    """Rebuild local vector index (placeholder)."""
+    console.print("[yellow]Command 'reindex' will be implemented in upcoming phases.[/yellow]")
+
+
+@app.command()
+def doctor():
+    """Run local diagnostics checks (placeholder)."""
+    console.print("[yellow]Command 'doctor' will be implemented in upcoming phases.[/yellow]")
+
+
+# ── entry point ───────────────────────────────────────────────────────
+
+
+def main():
+    app()
