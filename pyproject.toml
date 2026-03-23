@@ -1,6 +1,6 @@
 [project]
 name = "vecstash"
-version = "0.1.2"
+version = "0.1.3"
 description = "Local semantic storage and search for macOS"
 readme = "README.md"
 requires-python = ">=3.12"
