@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import Any
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 
+from vecstash.chunking import Chunk
 from vecstash.config import AppConfig
 from vecstash.extraction import ExtractedDocument
 
@@ -22,6 +24,15 @@ class StorageStatus:
     collection_name: str
     points_count: int
     documents_count: int
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    score: float
+    document_id: str
+    source_path: str
+    chunk_text: str
+    chunk_index: int
 
 
 class SQLiteRepository:
@@ -141,6 +152,28 @@ class SQLiteRepository:
         row = self._conn.execute("SELECT COUNT(*) AS n FROM documents").fetchone()
         return int(row["n"]) if row else 0
 
+    def delete_chunks(self, document_id: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM chunk_index_state WHERE document_id = ?",
+                (document_id,),
+            )
+
+    def upsert_chunk_index_states(self, chunks: list[Chunk]) -> None:
+        with self._conn:
+            for chunk in chunks:
+                point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk.chunk_id))
+                self._conn.execute(
+                    """
+                    INSERT INTO chunk_index_state(chunk_id, document_id, point_id, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(chunk_id) DO UPDATE SET
+                        point_id=excluded.point_id,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (chunk.chunk_id, chunk.document_id, point_id),
+                )
+
 
 class QdrantRepository:
     def __init__(self, qdrant_path: Path, collection_name: str = DEFAULT_COLLECTION_NAME):
@@ -163,6 +196,31 @@ class QdrantRepository:
     def get_collection_points_count(self) -> int:
         info = self.client.get_collection(self.collection_name)
         return int(info.points_count or 0)
+
+    def delete_document_points(self, document_id: str) -> None:
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="document_id",
+                        match=qmodels.MatchValue(value=document_id),
+                    )
+                ]
+            ),
+        )
+
+    def upsert_points(self, points: list[qmodels.PointStruct]) -> None:
+        self.client.upsert(collection_name=self.collection_name, points=points)
+
+    def search(self, query_vector: list[float], top_k: int) -> list[qmodels.ScoredPoint]:
+        response = self.client.query_points(
+            collection_name=self.collection_name,
+            query=query_vector,
+            limit=top_k,
+            with_payload=True,
+        )
+        return response.points
 
 
 class StorageManager:
@@ -194,3 +252,40 @@ class StorageManager:
 
     def get_document_metadata(self, document_id: str) -> dict[str, Any] | None:
         return self.sqlite.get_document(document_id)
+
+    def upsert_chunks(
+        self,
+        doc: ExtractedDocument,
+        chunks: list[Chunk],
+        embeddings: list[list[float]],
+    ) -> None:
+        self.qdrant.delete_document_points(doc.document_id)
+        self.sqlite.delete_chunks(doc.document_id)
+        points = [
+            qmodels.PointStruct(
+                id=str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk.chunk_id)),
+                vector=embeddings[i],
+                payload={
+                    "document_id": chunk.document_id,
+                    "source_path": str(doc.source_path),
+                    "chunk_text": chunk.text,
+                    "chunk_index": chunk.chunk_index,
+                },
+            )
+            for i, chunk in enumerate(chunks)
+        ]
+        self.qdrant.upsert_points(points)
+        self.sqlite.upsert_chunk_index_states(chunks)
+
+    def search(self, query_vector: list[float], top_k: int = 5) -> list[SearchResult]:
+        scored = self.qdrant.search(query_vector, top_k)
+        return [
+            SearchResult(
+                score=p.score,
+                document_id=p.payload["document_id"],
+                source_path=p.payload["source_path"],
+                chunk_text=p.payload["chunk_text"],
+                chunk_index=p.payload["chunk_index"],
+            )
+            for p in scored
+        ]
