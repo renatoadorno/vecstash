@@ -17,6 +17,7 @@ from vecstash.embedder import Embedder
 from vecstash.extraction import extract_files
 from vecstash.logging_utils import configure_logging, get_logger
 from vecstash.storage import StorageManager
+from vecstash.updater import check_for_update, download_and_install
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -90,6 +91,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Emit results as JSON.",
+    )
+
+    update_parser = subparsers.add_parser(
+        "update",
+        help="Check for and install updates from GitHub.",
+    )
+    update_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Only check if an update is available, don't install.",
+    )
+    update_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit result as JSON.",
     )
 
     for name, help_text in (
@@ -283,8 +299,55 @@ def _search(config: AppConfig, query: str, limit: int, as_json: bool) -> int:
     return 0
 
 
+def _update(check_only: bool, as_json: bool) -> int:
+    try:
+        info = check_for_update()
+    except RuntimeError as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if as_json:
+        print(json.dumps({
+            "current_version": info.current_version,
+            "latest_version": info.latest_version,
+            "update_available": info.update_available,
+            "release_url": info.release_url,
+        }))
+        if not info.update_available or check_only:
+            return 0
+    else:
+        if not info.update_available:
+            print(f"Already up to date (v{info.current_version}).")
+            return 0
+
+        print(f"New version available: v{info.current_version} → v{info.latest_version}")
+
+        if check_only:
+            return 0
+
+    print(f"Downloading and installing v{info.latest_version}...")
+    try:
+        download_and_install(info)
+    except RuntimeError as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Updated to v{info.latest_version}.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.command == "update":
+        return _update(check_only=args.check, as_json=args.json)
+
     config = load_config(args.config)
     configure_logging(config.paths.log_path)
     logger = get_logger(__name__)
