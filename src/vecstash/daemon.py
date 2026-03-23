@@ -95,6 +95,8 @@ def _cleanup_stale_socket(path: Path) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Daemon uses its own argparse (not Typer) — it has a single --config flag
+    # and no interactive terminal output. CLI commands use Typer in cli.py.
     parser = argparse.ArgumentParser(
         prog="vecstash-daemon",
         description="JSON-RPC daemon for local semantic storage/search.",
