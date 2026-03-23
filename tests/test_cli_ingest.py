@@ -5,9 +5,17 @@ import tempfile
 import unittest
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from vecstash import cli
+
+
+def _mock_embedder_class(config):
+    """Return a mock Embedder that produces fake 16-dim vectors."""
+    mock = MagicMock()
+    mock.vector_size = 16
+    mock.embed.side_effect = lambda texts: [[0.1] * 16 for _ in texts]
+    return mock
 
 
 class CliIngestTests(unittest.TestCase):
@@ -39,7 +47,8 @@ query_cache_size = 64
         )
         return cfg
 
-    def test_ingest_json_output(self) -> None:
+    @patch("vecstash.cli.Embedder", side_effect=_mock_embedder_class)
+    def test_ingest_json_output(self, _mock_cls) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             cfg = self._write_config(base)

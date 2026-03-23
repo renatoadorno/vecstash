@@ -63,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ingest_parser = subparsers.add_parser(
         "ingest",
-        help="Extract supported documents and prepare normalized payloads (indexing pipeline comes later).",
+        help="Extract, chunk, and index documents with vector embeddings.",
     )
     ingest_parser.add_argument(
         "inputs",
@@ -190,17 +190,25 @@ def _models_bootstrap(config: AppConfig, as_json: bool) -> int:
 
 
 def _ingest_extract(config: AppConfig, inputs: list[Path], as_json: bool) -> int:
-    storage = StorageManager(config)
+    logger = get_logger(__name__)
     embedder = Embedder(config)
+    storage = StorageManager(config)
     try:
-        storage.initialize()
+        storage.initialize(vector_size=embedder.vector_size)
         docs = extract_files(inputs)
         for doc in docs:
             storage.upsert_document_metadata(doc)
             chunks = chunk_document(doc)
             if chunks:
-                embeddings = embedder.embed([c.text for c in chunks])
-                storage.upsert_chunks(doc, chunks, embeddings)
+                try:
+                    embeddings = embedder.embed([c.text for c in chunks])
+                    storage.upsert_chunks(doc, chunks, embeddings)
+                except Exception:
+                    logger.exception(
+                        "embedding_failed",
+                        extra={"event": "embedding_failed", "source_path": str(doc.source_path)},
+                    )
+                    print(f"Warning: vector indexing failed for {doc.source_path}, metadata saved.", file=sys.stderr)
     finally:
         storage.close()
     payload = [
@@ -212,11 +220,10 @@ def _ingest_extract(config: AppConfig, inputs: list[Path], as_json: bool) -> int
         }
         for doc in docs
     ]
-    logger = get_logger(__name__)
     logger.info(
-        "ingest_extracted_documents",
+        "ingest_complete",
         extra={
-            "event": "ingest_extracted_documents",
+            "event": "ingest_complete",
             "count": len(docs),
             "model_name": config.model.name,
         },
@@ -226,10 +233,9 @@ def _ingest_extract(config: AppConfig, inputs: list[Path], as_json: bool) -> int
         print(json.dumps(payload))
         return 0
 
-    print("Ingest extraction summary")
+    print("Ingest summary")
     for item in payload:
         print(f"- {item['source_path']} [{item['source_kind']}] -> id={item['document_id']}")
-    print("Extraction complete. Vector indexing pipeline will be connected in next phases.")
     return 0
 
 
@@ -238,7 +244,10 @@ def _search(config: AppConfig, query: str, limit: int, as_json: bool) -> int:
     query_vector = embedder.embed([query])[0]
     storage = StorageManager(config)
     try:
-        storage.initialize()
+        storage.initialize(vector_size=embedder.vector_size)
+        if storage.status().points_count == 0:
+            print("No documents indexed yet. Run 'vecstash ingest <files>' first.")
+            return 1
         results = storage.search(query_vector, top_k=limit)
     finally:
         storage.close()
@@ -249,6 +258,7 @@ def _search(config: AppConfig, query: str, limit: int, as_json: bool) -> int:
                 [
                     {
                         "score": r.score,
+                        "document_id": r.document_id,
                         "source_path": r.source_path,
                         "chunk_index": r.chunk_index,
                         "chunk_text": r.chunk_text,

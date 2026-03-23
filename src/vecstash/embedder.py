@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from huggingface_hub.errors import LocalEntryNotFoundError
+
 from vecstash.config import AppConfig, _resolve_model_path, _restore_hf_cache, _with_hf_cache
 
 
@@ -10,6 +12,7 @@ class Embedder:
         self._config = config
         self._model = None
         self._tokenizer = None
+        self._vector_size: int | None = None
 
     def _load(self) -> None:
         from mlx_embeddings import load as mlx_load
@@ -23,9 +26,24 @@ class Embedder:
             )
             model, processor = mlx_load(str(model_path))
             self._model = model
+            # TokenizerWrapper delegates attribute access via __getattr__ but does
+            # not implement __call__, so we access the underlying HF tokenizer
+            # directly to use its __call__ for batch encoding.
             self._tokenizer = processor._tokenizer
+            self._vector_size = model.config.hidden_size
+        except LocalEntryNotFoundError:
+            raise RuntimeError(
+                f"Model '{self._config.model.name}' not found in local cache. "
+                "Run 'vecstash models bootstrap' to download it."
+            )
         finally:
             _restore_hf_cache(old)
+
+    @property
+    def vector_size(self) -> int:
+        if self._model is None:
+            self._load()
+        return self._vector_size
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Generate L2-normalized embeddings for a list of texts."""

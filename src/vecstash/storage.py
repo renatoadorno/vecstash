@@ -18,6 +18,10 @@ SCHEMA_VERSION = 1
 DEFAULT_COLLECTION_NAME = "document_chunks"
 
 
+def _chunk_point_id(chunk: Chunk) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk.chunk_id))
+
+
 @dataclass(frozen=True)
 class StorageStatus:
     schema_version: int
@@ -162,7 +166,6 @@ class SQLiteRepository:
     def upsert_chunk_index_states(self, chunks: list[Chunk]) -> None:
         with self._conn:
             for chunk in chunks:
-                point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk.chunk_id))
                 self._conn.execute(
                     """
                     INSERT INTO chunk_index_state(chunk_id, document_id, point_id, updated_at)
@@ -171,7 +174,7 @@ class SQLiteRepository:
                         point_id=excluded.point_id,
                         updated_at=CURRENT_TIMESTAMP
                     """,
-                    (chunk.chunk_id, chunk.document_id, point_id),
+                    (chunk.chunk_id, chunk.document_id, _chunk_point_id(chunk)),
                 )
 
 
@@ -259,11 +262,15 @@ class StorageManager:
         chunks: list[Chunk],
         embeddings: list[list[float]],
     ) -> None:
+        if len(chunks) != len(embeddings):
+            raise ValueError(
+                f"Mismatch: {len(chunks)} chunks but {len(embeddings)} embeddings"
+            )
         self.qdrant.delete_document_points(doc.document_id)
         self.sqlite.delete_chunks(doc.document_id)
         points = [
             qmodels.PointStruct(
-                id=str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk.chunk_id)),
+                id=_chunk_point_id(chunk),
                 vector=embeddings[i],
                 payload={
                     "document_id": chunk.document_id,
