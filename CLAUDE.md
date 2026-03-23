@@ -41,6 +41,7 @@ Two entry points are defined in `pyproject.toml`:
 
 | Module | Role |
 |---|---|
+| `cli.py` | Typer + Rich CLI: `app = typer.Typer()`, `models_app` sub-group, `Console(stderr=True)` for styled output, `Table` for status/ingest, `Panel(Markdown(...))` for search results, `--json` bypasses Rich |
 | `config.py` | `AppConfig` dataclass (frozen), TOML loading from `~/.vecstash/config.toml`, HuggingFace model resolution via `mlx_embeddings` |
 | `extraction.py` | Text extraction from `.txt`, `.md`, `.html`, `.pdf` files into `ExtractedDocument`; content hashing; text normalization |
 | `chunking.py` | Paragraph-level document chunking (`\n\n+` split, min 50 chars); `Chunk` dataclass with deterministic `chunk_id` (sha256) |
@@ -54,7 +55,7 @@ Two entry points are defined in `pyproject.toml`:
 ### Data flow
 
 1. **Ingest**: `cli.py` calls `extraction.extract_files()` → `ExtractedDocument` list → `StorageManager.upsert_document_metadata()` to SQLite → `chunk_document()` splits into paragraphs → `Embedder.embed()` generates vectors → `StorageManager.upsert_chunks()` stores in Qdrant + SQLite.
-2. **Search**: `cli.py` embeds query via `Embedder.embed()` → `StorageManager.search()` queries Qdrant with cosine similarity → returns `SearchResult` list with score, source path, and chunk text.
+2. **Search**: `cli.py` embeds query via `Embedder.embed()` → `StorageManager.search()` queries Qdrant with cosine similarity → returns `SearchResult` list displayed as Rich Panels with Markdown rendering (tables, headers, lists rendered natively).
 3. **Update**: `cli.py` calls `check_for_update()` → GitHub API `/releases/latest` → compares semver → if newer, `download_and_install()` downloads tarball → extracts → `uv tool install --force`.
 4. **Daemon**: `daemon.py` boots, optionally preloads the MLX model, creates the Unix socket, and loops on `socketserver.UnixStreamServer`. Clients send newline-delimited JSON-RPC 2.0 messages.
 5. **Config**: `load_config()` auto-creates `~/.vecstash/config.toml` on first run if missing. All paths must be within `paths.data_dir` (enforced at parse time).
