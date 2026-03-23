@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from vecstash.config import AppConfig, load_config, validate_model_reference
+from vecstash.embedder import create_embedder
 from vecstash.logging_utils import configure_logging, get_logger
 from vecstash.rpc import jsonrpc_error, jsonrpc_result, parse_jsonrpc_line
 from vecstash.storage import StorageManager
@@ -141,8 +142,9 @@ def main(argv: list[str] | None = None) -> int:
     socket_path = config.paths.socket_path
     socket_path.parent.mkdir(parents=True, exist_ok=True)
     _cleanup_stale_socket(socket_path)
+    embedder = create_embedder(config)
     storage = StorageManager(config)
-    storage.initialize()
+    storage.initialize(vector_size=embedder.vector_size)
 
     with JsonRpcServer(str(socket_path), JsonRpcHandler, config, storage) as server:
         os.chmod(socket_path, 0o600)

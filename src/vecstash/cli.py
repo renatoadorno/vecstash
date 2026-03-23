@@ -70,7 +70,7 @@ def status(
     """Show local configuration and storage status."""
     config = _get_config()
     storage = StorageManager(config)
-    storage.initialize()
+    storage.sqlite.migrate()
     ss = storage.status()
     storage.close()
 

@@ -185,7 +185,7 @@ class QdrantRepository:
         self.collection_name = collection_name
         self.client = QdrantClient(path=str(qdrant_path))
 
-    def ensure_collection(self, vector_size: int = 768, distance: qmodels.Distance = qmodels.Distance.COSINE) -> None:
+    def ensure_collection(self, vector_size: int, distance: qmodels.Distance = qmodels.Distance.COSINE) -> None:
         collections = self.client.get_collections().collections
         exists = any(col.name == self.collection_name for col in collections)
         if exists:
@@ -205,6 +205,9 @@ class QdrantRepository:
         )
 
     def get_collection_points_count(self) -> int:
+        collections = self.client.get_collections().collections
+        if not any(col.name == self.collection_name for col in collections):
+            return 0
         info = self.client.get_collection(self.collection_name)
         return int(info.points_count or 0)
 
@@ -245,7 +248,7 @@ class StorageManager:
         self.sqlite.close()
         self.qdrant.client.close()
 
-    def initialize(self, vector_size: int = 768) -> StorageStatus:
+    def initialize(self, vector_size: int) -> StorageStatus:
         self.sqlite.migrate()
         self.qdrant.ensure_collection(vector_size=vector_size)
         return self.status()
