@@ -17,7 +17,7 @@ class MLXEmbedder:
     def _load(self) -> None:
         from mlx_embeddings import load as mlx_load
 
-        old = _with_hf_cache(self._config.model.cache_dir)
+        old = _with_hf_cache(self._config.model.cache_dir, offline=True)
         try:
             model_path = _resolve_model_path(
                 model_name=self._config.model.name,
@@ -78,7 +78,7 @@ class SentenceTransformerEmbedder:
                 "sentence-transformers not installed. "
                 "Install with: pip install vecstash[st]"
             )
-        old = _with_hf_cache(self._config.model.cache_dir)
+        old = _with_hf_cache(self._config.model.cache_dir, offline=True)
         try:
             self._model = SentenceTransformer(
                 self._config.model.name,

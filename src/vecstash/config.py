@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 import tomllib
 
+import huggingface_hub.constants
 from huggingface_hub import snapshot_download
 from huggingface_hub.errors import (
     GatedRepoError,
@@ -235,15 +236,22 @@ def ensure_default_config_exists(path: Path = DEFAULT_CONFIG_PATH) -> None:
         path.write_text(render_default_config_toml(), encoding="utf-8")
 
 
-def _with_hf_cache(cache_dir: Path) -> dict[str, str | None]:
-    keys = ("HF_HOME", "HF_HUB_CACHE")
-    old_values = {key: os.environ.get(key) for key in keys}
+def _with_hf_cache(cache_dir: Path, *, offline: bool = False) -> dict[str, str | None]:
+    keys = ("HF_HOME", "HF_HUB_CACHE", "HF_HUB_OFFLINE")
+    old_values: dict[str, str | None | bool] = {key: os.environ.get(key) for key in keys}
+    old_values["_HF_HUB_OFFLINE_CONST"] = huggingface_hub.constants.HF_HUB_OFFLINE
     os.environ["HF_HOME"] = str(cache_dir)
     os.environ["HF_HUB_CACHE"] = str(cache_dir / "hub")
+    if offline:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        huggingface_hub.constants.HF_HUB_OFFLINE = True
     return old_values
 
 
-def _restore_hf_cache(old_values: dict[str, str | None]) -> None:
+def _restore_hf_cache(old_values: dict[str, str | None | bool]) -> None:
+    hf_offline_const = old_values.pop("_HF_HUB_OFFLINE_CONST", None)
+    if hf_offline_const is not None:
+        huggingface_hub.constants.HF_HUB_OFFLINE = hf_offline_const
     for key, old in old_values.items():
         if old is None:
             os.environ.pop(key, None)
