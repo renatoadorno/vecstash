@@ -7,6 +7,7 @@ from typing import Annotated, Optional
 
 import typer
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
@@ -293,7 +294,7 @@ def search(
         filename = Path(r.source_path).name
         score_color = "green" if r.score > 0.8 else "yellow" if r.score > 0.5 else "red"
         title = f"[{score_color}]{r.score:.4f}[/{score_color}]  {filename}"
-        console.print(Panel(r.chunk_text, title=title, border_style="dim"))
+        console.print(Panel(Markdown(r.chunk_text), title=title, border_style="dim"))
 
 
 # ── update ────────────────────────────────────────────────────────────
