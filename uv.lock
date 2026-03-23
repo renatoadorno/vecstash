@@ -1919,7 +1919,7 @@ wheels = [
 
 [[package]]
 name = "vecstash"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -1927,6 +1927,7 @@ dependencies = [
     { name = "mlx-embeddings" },
     { name = "pypdf" },
     { name = "qdrant-client" },
+    { name = "typer" },
 ]
 
 [package.metadata]
@@ -1936,6 +1937,7 @@ requires-dist = [
     { name = "mlx-embeddings", specifier = ">=0.0.5" },
     { name = "pypdf", specifier = ">=6.9.1" },
     { name = "qdrant-client", specifier = ">=1.17.1" },
+    { name = "typer", specifier = ">=0.15" },
 ]
 
 [[package]]
