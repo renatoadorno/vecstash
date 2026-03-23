@@ -19,6 +19,80 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(loaded.model.name)
             self.assertTrue(loaded.paths.data_dir.exists())
             self.assertGreater(loaded.runtime.max_batch_size, 0)
+            self.assertEqual(loaded.model.backend, "sentence_transformers")
+
+    def test_backend_defaults_to_sentence_transformers(self) -> None:
+        """Config without backend field defaults to sentence_transformers."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "config.toml"
+            cfg.write_text(render_default_config_toml(), encoding="utf-8")
+            loaded = load_config(cfg)
+            self.assertEqual(loaded.model.backend, "sentence_transformers")
+
+    def test_backend_sentence_transformers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            cfg = base / "config.toml"
+            cfg.write_text(
+                f"""
+[app]
+name = "vecstash"
+
+[model]
+name = "BAAI/bge-m3"
+backend = "sentence_transformers"
+cache_dir = "{(base / "models").as_posix()}"
+preload_on_start = false
+
+[paths]
+data_dir = "{(base / "data").as_posix()}"
+sqlite_path = "{(base / "data" / "metadata.db").as_posix()}"
+qdrant_path = "{(base / "data" / "qdrant").as_posix()}"
+socket_path = "{(base / "data" / "daemon.sock").as_posix()}"
+log_path = "{(base / "data" / "vecstash.log").as_posix()}"
+
+[runtime]
+max_batch_size = 32
+max_concurrency = 2
+query_cache_size = 64
+""".strip(),
+                encoding="utf-8",
+            )
+            loaded = load_config(cfg)
+            self.assertEqual(loaded.model.backend, "sentence_transformers")
+            self.assertEqual(loaded.model.name, "BAAI/bge-m3")
+
+    def test_invalid_backend_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            cfg = base / "config.toml"
+            cfg.write_text(
+                f"""
+[app]
+name = "vecstash"
+
+[model]
+name = "some-model"
+backend = "invalid_backend"
+cache_dir = "{(base / "models").as_posix()}"
+preload_on_start = false
+
+[paths]
+data_dir = "{(base / "data").as_posix()}"
+sqlite_path = "{(base / "data" / "metadata.db").as_posix()}"
+qdrant_path = "{(base / "data" / "qdrant").as_posix()}"
+socket_path = "{(base / "data" / "daemon.sock").as_posix()}"
+log_path = "{(base / "data" / "vecstash.log").as_posix()}"
+
+[runtime]
+max_batch_size = 32
+max_concurrency = 2
+query_cache_size = 64
+""".strip(),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                load_config(cfg)
 
     def test_invalid_runtime_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

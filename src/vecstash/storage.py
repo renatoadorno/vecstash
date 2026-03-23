@@ -189,6 +189,14 @@ class QdrantRepository:
         collections = self.client.get_collections().collections
         exists = any(col.name == self.collection_name for col in collections)
         if exists:
+            info = self.client.get_collection(self.collection_name)
+            existing_size = info.config.params.vectors.size
+            if existing_size != vector_size:
+                raise RuntimeError(
+                    f"Vector dimension mismatch: collection has {existing_size}-dim vectors "
+                    f"but current model produces {vector_size}-dim. "
+                    f"Run 'vecstash reset' to clear the index before switching models."
+                )
             return
         self.client.create_collection(
             collection_name=self.collection_name,

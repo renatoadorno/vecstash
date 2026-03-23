@@ -6,7 +6,7 @@ This guide covers setting up a local development environment, running tests, and
 
 ## Prerequisites
 
-- **macOS on Apple Silicon** (M1/M2/M3/M4) — MLX requires arm64.
+- **macOS on Apple Silicon** (M1/M2/M3/M4) — MPS GPU acceleration requires arm64.
 - **Python 3.12+** — pinned via `.python-version`.
 - **uv** — install from [astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) or `brew install uv`.
 
@@ -20,6 +20,9 @@ git clone <repo-url> && cd vecstash
 
 # Install dependencies in a local venv
 uv sync
+
+# Install with MLX backend (optional)
+uv sync --extra mlx
 
 # Install in editable mode (code changes take effect without reinstalling)
 make dev
@@ -39,10 +42,12 @@ make test
 uv run python -m unittest tests/test_extraction.py
 
 # Run a single test case
-uv run python -m unittest tests.test_cli_models.TestModelsValidate.test_validate_ok
+uv run python -m unittest tests.test_cli_models.CliModelsTests.test_models_validate_json
 ```
 
-Tests use `unittest` with no external test runner required. The test suite covers config loading, text extraction, storage (SQLite + Qdrant), CLI commands, and daemon preload behaviour.
+Tests use `unittest` with no external test runner required. The test suite covers config loading (including backend parsing), text extraction, storage (SQLite + Qdrant + dimension guard), CLI commands, embedder factory, and daemon preload behaviour.
+
+Tests mock `create_embedder` (not the model classes directly) to avoid loading real models.
 
 ---
 
@@ -91,17 +96,24 @@ Source lives in `src/vecstash/`. Two entry points are defined in `pyproject.toml
 
 | Module | Role |
 |--------|------|
-| `config.py` | `AppConfig` dataclass (frozen), TOML loading from `~/.vecstash/config.toml`, HuggingFace model resolution via `mlx_embeddings` |
+| `config.py` | `AppConfig` dataclass (frozen), TOML loading, `ModelConfig.backend` field (`"sentence_transformers"` / `"mlx"`), backend-aware `validate_model_reference()` |
+| `embedder.py` | Multi-backend: `MLXEmbedder`, `SentenceTransformerEmbedder`, `create_embedder()` factory. Lazy loading, `local_files_only=True` at runtime |
 | `extraction.py` | Text extraction from `.txt`, `.md`, `.html`, `.pdf` into `ExtractedDocument`; content hashing; text normalization |
-| `storage.py` | `StorageManager` owns `SQLiteRepository` (metadata + schema migrations) and `QdrantRepository` (vector collection via embedded Qdrant) |
+| `storage.py` | `StorageManager` owns `SQLiteRepository` (metadata + schema migrations) and `QdrantRepository` (vector collection); vector dimension mismatch guard |
 | `daemon.py` | `JsonRpcServer` on a Unix socket; dispatches JSON-RPC 2.0 methods via `JsonRpcHandler` |
 | `rpc.py` | Pure JSON-RPC 2.0 helpers: parse requests, format results/errors |
 | `logging_utils.py` | JSON-structured file logging; extra fields: `command`, `event`, `method`, `client` |
-| `cli.py` | CLI entry point with subcommands: `status`, `models`, `ingest`, `search`, `reindex`, `doctor` |
+| `cli.py` | Typer + Rich CLI: `version`, `status`, `storage`, `models`, `ingest`, `search`, `update`, `reset`, `reindex`, `doctor` |
+
+### Embedding backends
+
+The default backend is `sentence_transformers` using `BAAI/bge-m3` (1024-dim, MPS GPU). The `mlx` backend is available as an optional extra (`pip install vecstash[mlx]`).
+
+The `create_embedder(config)` factory reads `config.model.backend` and returns the appropriate embedder class. Both backends implement the same interface: `vector_size` property and `embed(texts)` method.
 
 ### Scaffolded commands
 
-`search`, `reindex`, and `doctor` (CLI and RPC) are defined but return placeholder responses — not yet implemented.
+`reindex` and `doctor` (CLI and RPC) are defined but return placeholder responses — not yet implemented.
 
 ---
 

@@ -12,12 +12,12 @@ from huggingface_hub.errors import (
     RepositoryNotFoundError,
     RevisionNotFoundError,
 )
-from mlx_embeddings import load as mlx_load
-
 DEFAULT_CONFIG_DIR = Path.home() / ".vecstash"
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.toml"
 DEFAULT_APP_NAME = "vecstash"
-DEFAULT_MODEL_NAME = "mlx-community/nomicai-modernbert-embed-base-bf16"
+DEFAULT_MODEL_NAME = "BAAI/bge-m3"
+DEFAULT_BACKEND = "sentence_transformers"
+VALID_BACKENDS = ("mlx", "sentence_transformers")
 SUPPORTED_MODEL_ARCHITECTURES = (
     "XLM-RoBERTa",
     "BERT",
@@ -32,6 +32,9 @@ KNOWN_GOOD_MODELS = (
     "Qwen/Qwen3-Embedding-0.6B",
     "Qwen/Qwen3-Embedding-4B",
 )
+ST_KNOWN_GOOD_MODELS = (
+    "BAAI/bge-m3",
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,7 @@ class ModelConfig:
     name: str
     cache_dir: Path
     preload_on_start: bool
+    backend: str
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,7 @@ def _default_config() -> AppConfig:
             name=DEFAULT_MODEL_NAME,
             cache_dir=model_cache,
             preload_on_start=False,
+            backend=DEFAULT_BACKEND,
         ),
         paths=PathsConfig(
             data_dir=data_dir,
@@ -141,6 +146,9 @@ def _parse_config_doc(doc: dict[str, object]) -> AppConfig:
         model.get("preload_on_start", default.model.preload_on_start),
         "model.preload_on_start",
     )
+    backend = model.get("backend", default.model.backend)
+    if backend not in VALID_BACKENDS:
+        raise ValueError(f"model.backend must be one of {VALID_BACKENDS}, got '{backend}'")
 
     data_dir = _expand(paths.get("data_dir", str(default.paths.data_dir)))
     sqlite_path = _expand(paths.get("sqlite_path", str(default.paths.sqlite_path)))
@@ -171,6 +179,7 @@ def _parse_config_doc(doc: dict[str, object]) -> AppConfig:
             name=model_name,
             cache_dir=model_cache,
             preload_on_start=preload_on_start,
+            backend=backend,
         ),
         paths=PathsConfig(
             data_dir=data_dir,
@@ -189,18 +198,22 @@ def _parse_config_doc(doc: dict[str, object]) -> AppConfig:
 
 def render_default_config_toml() -> str:
     d = _default_config()
-    supported = ", ".join(SUPPORTED_MODEL_ARCHITECTURES)
-    known = "\n".join(f"# - {name}" for name in KNOWN_GOOD_MODELS)
+    st_known = "\n".join(f"# - {name}" for name in ST_KNOWN_GOOD_MODELS)
+    mlx_known = "\n".join(f"# - {name}" for name in KNOWN_GOOD_MODELS)
     return (
         "# vecstash configuration\n"
-        "# Supported mlx_embeddings architectures:\n"
-        f"# {supported}\n"
-        "# Known good model IDs (examples):\n"
-        f"{known}\n\n"
+        "# Default backend: sentence_transformers (MPS GPU)\n"
+        "# Alternative backend: mlx (Apple Silicon native)\n"
+        "#\n"
+        "# sentence_transformers models:\n"
+        f"{st_known}\n"
+        "# MLX models:\n"
+        f"{mlx_known}\n\n"
         "[app]\n"
         f'name = "{d.app_name}"\n\n'
         "[model]\n"
         f'name = "{d.model.name}"\n'
+        f'backend = "{d.model.backend}"\n'
         f'cache_dir = "{d.model.cache_dir}"\n'
         f"preload_on_start = {str(d.model.preload_on_start).lower()}\n\n"
         "[paths]\n"
@@ -259,7 +272,17 @@ def _resolve_model_path(model_name: str, cache_dir: Path, offline_only: bool) ->
     )
 
 
-def validate_model_reference(model_name: str, cache_dir: Path, offline_only: bool) -> tuple[bool, str]:
+def validate_model_reference(
+    model_name: str, cache_dir: Path, offline_only: bool, backend: str = "mlx"
+) -> tuple[bool, str]:
+    if backend == "sentence_transformers":
+        return _validate_st_model(model_name, cache_dir, offline_only)
+    return _validate_mlx_model(model_name, cache_dir, offline_only)
+
+
+def _validate_mlx_model(model_name: str, cache_dir: Path, offline_only: bool) -> tuple[bool, str]:
+    from mlx_embeddings import load as mlx_load
+
     old = _with_hf_cache(cache_dir)
     try:
         model_path = _resolve_model_path(model_name=model_name, cache_dir=cache_dir, offline_only=offline_only)
@@ -278,6 +301,30 @@ def validate_model_reference(model_name: str, cache_dir: Path, offline_only: boo
         return False, "model revision not found"
     except GatedRepoError:
         return False, "model is gated and requires authentication"
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        _restore_hf_cache(old)
+
+
+def _validate_st_model(model_name: str, cache_dir: Path, offline_only: bool) -> tuple[bool, str]:
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError:
+        return False, "sentence-transformers not installed (pip install vecstash[st])"
+    old = _with_hf_cache(cache_dir)
+    try:
+        kwargs: dict[str, object] = {
+            "model_name_or_path": model_name,
+            "device": "mps",
+            "cache_folder": str(cache_dir / "hub"),
+        }
+        if offline_only:
+            kwargs["local_files_only"] = True
+        SentenceTransformer(**kwargs)
+        if offline_only:
+            return True, "model resolved from local cache"
+        return True, "model resolved (local cache and/or remote)"
     except Exception as exc:
         return False, str(exc)
     finally:

@@ -1,6 +1,6 @@
 [project]
 name = "vecstash"
-version = "0.1.5"
+version = "0.1.6"
 description = "Local semantic storage and search for macOS"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -8,7 +8,7 @@ license = "MIT"
 authors = [
     { name = "Renato Adorno", email = "renattoadorno@gmail.com" },
 ]
-keywords = ["embeddings", "semantic-search", "mlx", "apple-silicon", "offline", "vector-store"]
+keywords = ["embeddings", "semantic-search", "sentence-transformers", "mlx", "apple-silicon", "offline", "vector-store"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -23,11 +23,14 @@ classifiers = [
 dependencies = [
     "beautifulsoup4>=4.14.3",
     "markdown-it-py>=4.0.0",
-    "mlx-embeddings>=0.0.5",
     "pypdf>=6.9.1",
     "qdrant-client>=1.17.1",
+    "sentence-transformers>=3.0",
     "typer>=0.15",
 ]
+
+[project.optional-dependencies]
+mlx = ["mlx-embeddings>=0.0.5"]
 
 [project.urls]
 Homepage = "https://github.com/renatoadorno/vecstash"

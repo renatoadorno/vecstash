@@ -50,7 +50,7 @@ query_cache_size = 64
         )
         return cfg
 
-    @patch("vecstash.cli.Embedder", side_effect=_mock_embedder_class)
+    @patch("vecstash.cli.create_embedder", side_effect=_mock_embedder_class)
     def test_ingest_json_output(self, _mock_cls) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

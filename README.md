@@ -8,7 +8,9 @@ Offline semantic storage and search for macOS Apple Silicon — no cloud, no API
 
 ## Features
 
-- **Fully offline** — embeddings run locally via MLX on Apple Silicon (M1/M2/M3/M4)
+- **Fully offline** — embeddings run locally on Apple Silicon (M1/M2/M3/M4)
+- **GPU-accelerated** — default model (`BAAI/bge-m3`) runs via MPS on the Apple GPU
+- **Multi-backend** — `sentence_transformers` (default) or `mlx` as an alternative
 - **Fast local search** — vectors stored in embedded Qdrant, metadata in SQLite
 - **Multiple file formats** — ingest `.txt`, `.md`, `.html`, and `.pdf` files
 - **CLI + background daemon** — one-shot commands or a persistent JSON-RPC 2.0 server over a Unix socket
@@ -27,7 +29,7 @@ git clone https://github.com/renatoadorno/vecstash.git && cd vecstash
 ./install.sh
 ```
 
-This checks prerequisites, installs both binaries to `~/.local/bin`, downloads the embedding model (~500 MB, one-time), and sets up launchd for automatic daemon startup.
+This checks prerequisites, installs both binaries to `~/.local/bin`, downloads the embedding model (one-time), and sets up launchd for automatic daemon startup.
 
 **Manual install:**
 
@@ -36,6 +38,14 @@ make install        # Install binaries to ~/.local/bin
 make bootstrap      # Download the embedding model
 make launchd-install  # Set up daemon auto-start
 ```
+
+**With MLX backend (optional):**
+
+```bash
+uv pip install vecstash[mlx]
+```
+
+Then set `backend = "mlx"` and an MLX model name in `~/.vecstash/config.toml`.
 
 ## Usage
 
@@ -61,10 +71,22 @@ Run a semantic search across all ingested documents:
 vecstash search "how to configure authentication"
 
 # Limit results
-vecstash search "database migrations" --top-k 5
+vecstash search "database migrations" --limit 5
 
 # JSON output for scripting
 vecstash search "error handling" --json
+```
+
+### Utility commands
+
+```bash
+vecstash version                       # Show current version
+vecstash status                        # Show configuration and storage status
+vecstash storage                       # Show disk usage of databases
+vecstash models show                   # Show model info and supported architectures
+vecstash models bootstrap              # Download model for offline use
+vecstash reset                         # Delete all indexed data (with confirmation)
+vecstash update --check                # Check for updates
 ```
 
 ### Via daemon (JSON-RPC 2.0)
@@ -79,14 +101,6 @@ printf '{"jsonrpc":"2.0","id":1,"method":"healthcheck","params":{}}\n' \
 # Search via daemon
 printf '{"jsonrpc":"2.0","id":1,"method":"search","params":{"query":"authentication","top_k":5}}\n' \
   | nc -U ~/.vecstash/daemon.sock
-```
-
-### Other commands
-
-```bash
-vecstash status                        # Show configuration and storage status
-vecstash models show                   # Show model info and supported architectures
-vecstash models bootstrap              # Download model for offline use
 ```
 
 Uninstall:

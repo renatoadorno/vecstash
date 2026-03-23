@@ -17,19 +17,20 @@ from rich.table import Table
 from vecstash.chunking import chunk_document
 from vecstash.config import (
     KNOWN_GOOD_MODELS,
+    ST_KNOWN_GOOD_MODELS,
     SUPPORTED_MODEL_ARCHITECTURES,
     AppConfig,
     load_config,
     validate_model_reference,
 )
-from vecstash.embedder import Embedder
+from vecstash.embedder import create_embedder
 from vecstash.extraction import extract_files
 from vecstash.logging_utils import configure_logging, get_logger
 from vecstash.storage import StorageManager
 from vecstash.updater import check_for_update, download_and_install
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_short=True)
-models_app = typer.Typer(no_args_is_help=True, help="Inspect and manage MLX models.")
+models_app = typer.Typer(no_args_is_help=True, help="Inspect and manage embedding models.")
 app.add_typer(models_app, name="models")
 
 console = Console(stderr=True)
@@ -76,6 +77,7 @@ def status(
     payload = {
         "app_name": config.app_name,
         "model_name": config.model.name,
+        "model_backend": config.model.backend,
         "model_cache_dir": str(config.model.cache_dir),
         "data_dir": str(config.paths.data_dir),
         "sqlite_path": str(config.paths.sqlite_path),
@@ -115,20 +117,23 @@ def models_show():
     table.add_column("Key", style="cyan")
     table.add_column("Value")
     table.add_row("model.name", config.model.name)
+    table.add_row("model.backend", config.model.backend)
     table.add_row("model.cache_dir", str(config.model.cache_dir))
     table.add_row("model.preload_on_start", str(config.model.preload_on_start))
     console.print(table)
 
-    arch_table = Table(title="Supported architectures")
-    arch_table.add_column("Family", style="green")
-    for item in SUPPORTED_MODEL_ARCHITECTURES:
-        arch_table.add_row(item)
-    console.print(arch_table)
+    if config.model.backend == "mlx":
+        arch_table = Table(title="Supported MLX architectures")
+        arch_table.add_column("Family", style="green")
+        for item in SUPPORTED_MODEL_ARCHITECTURES:
+            arch_table.add_row(item)
+        console.print(arch_table)
 
+    good_models = ST_KNOWN_GOOD_MODELS if config.model.backend == "sentence_transformers" else KNOWN_GOOD_MODELS
     models_table = Table(title="Known good models")
     models_table.add_column("Model ID", style="dim")
-    for model in KNOWN_GOOD_MODELS:
-        models_table.add_row(model)
+    for m in good_models:
+        models_table.add_row(m)
     console.print(models_table)
 
 
@@ -142,6 +147,7 @@ def models_validate(
         model_name=config.model.name,
         cache_dir=config.model.cache_dir,
         offline_only=offline_only,
+        backend=config.model.backend,
     )
     print(json_module.dumps({
         "model_name": config.model.name,
@@ -163,6 +169,7 @@ def models_bootstrap(
         model_name=config.model.name,
         cache_dir=config.model.cache_dir,
         offline_only=False,
+        backend=config.model.backend,
     )
     payload = {
         "model_name": config.model.name,
@@ -197,7 +204,7 @@ def ingest(
     """Extract, chunk, and index documents with vector embeddings."""
     config = _get_config()
     logger = get_logger(__name__)
-    embedder = Embedder(config)
+    embedder = create_embedder(config)
     storage = StorageManager(config)
     try:
         storage.initialize(vector_size=embedder.vector_size)
@@ -262,7 +269,7 @@ def search(
 ):
     """Run semantic similarity search."""
     config = _get_config()
-    embedder = Embedder(config)
+    embedder = create_embedder(config)
     query_vector = embedder.embed([query])[0]
     storage = StorageManager(config)
     try:

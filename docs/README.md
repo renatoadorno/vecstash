@@ -7,11 +7,11 @@ Provides a CLI for one-shot operations and a background daemon exposing a JSON-R
 
 ## Prerequisites
 
-- **macOS on Apple Silicon** (M1/M2/M3/M4) — MLX requires arm64.
+- **macOS on Apple Silicon** (M1/M2/M3/M4) — MPS GPU acceleration requires arm64.
 - **Python 3.12+** — pinned via `.python-version`.
 - **uv** — install from [astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) or `brew install uv`.
 
-The first run downloads the embedding model (~500 MB, one-time).
+The first run downloads the embedding model (one-time).
 
 ---
 
@@ -37,6 +37,20 @@ vecstash models bootstrap
 
 # 3. Verify
 vecstash status
+```
+
+### With MLX backend (optional)
+
+```bash
+uv pip install vecstash[mlx]
+```
+
+Then edit `~/.vecstash/config.toml`:
+
+```toml
+[model]
+name = "mlx-community/nomicai-modernbert-embed-base-bf16"
+backend = "mlx"
 ```
 
 ### Editable install (development)
@@ -67,27 +81,31 @@ Configuration lives at `~/.vecstash/config.toml`. It is auto-created with defaul
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `name` | string | `"mlx-community/nomicai-modernbert-embed-base-bf16"` | HuggingFace model ID or local filesystem path |
+| `name` | string | `"BAAI/bge-m3"` | HuggingFace model ID or local filesystem path |
+| `backend` | string | `"sentence_transformers"` | Embedding backend: `"sentence_transformers"` or `"mlx"` |
 | `cache_dir` | path | `~/.vecstash/models` | Directory for downloaded model files |
 | `preload_on_start` | bool | `false` | Load model into memory when the daemon starts |
 
-If `name` is a local path that exists, it is used directly. Otherwise the model is fetched from HuggingFace via `snapshot_download` into `cache_dir/hub/`.
+Models are downloaded via `vecstash models bootstrap` and stored in `cache_dir/hub/`. At runtime, models are loaded from local cache only (`local_files_only=True`).
 
-**Supported MLX embedding architectures:**
+**Embedding backends:**
 
-- XLM-RoBERTa
-- BERT
-- ModernBERT
-- Qwen3
-- Qwen3-VL
+| Backend | Default Model | Dimensions | Device | Install |
+|---|---|---|---|---|
+| `sentence_transformers` | `BAAI/bge-m3` | 1024 | MPS (GPU) | included |
+| `mlx` | `mlx-community/nomicai-modernbert-embed-base-bf16` | 768 | MLX (Apple Silicon) | `pip install vecstash[mlx]` |
 
-**Known good model IDs:**
+> **Note:** Switching backends requires re-indexing — run `vecstash reset` then re-ingest your documents. The storage layer detects dimension mismatches and will show a clear error.
+
+**Known good MLX models:**
 
 - `mlx-community/nomicai-modernbert-embed-base-bf16`
 - `mlx-community/all-MiniLM-L6-v2-4bit`
 - `mlx-community/answerdotai-ModernBERT-base-4bit`
 - `Qwen/Qwen3-Embedding-0.6B`
 - `Qwen/Qwen3-Embedding-4B`
+
+**Supported MLX architectures:** XLM-RoBERTa, BERT, ModernBERT, Qwen3, Qwen3-VL.
 
 ### `[paths]`
 
@@ -116,7 +134,8 @@ If `name` is a local path that exists, it is used directly. Otherwise the model 
 name = "vecstash"
 
 [model]
-name = "mlx-community/nomicai-modernbert-embed-base-bf16"
+name = "BAAI/bge-m3"
+backend = "sentence_transformers"
 cache_dir = "~/.vecstash/models"
 preload_on_start = false
 
@@ -139,40 +158,45 @@ query_cache_size = 2048
 
 All commands accept `--config PATH` to use a custom config file.
 
+### `vecstash version [--json]`
+
+Show the current version.
+
+```bash
+$ vecstash version
+vecstash v0.1.6
+
+$ vecstash version --json
+{"version": "0.1.6"}
+```
+
 ### `vecstash status [--json]`
 
 Show configuration and storage status.
 
 ```bash
-$ vecstash status
-vecstash status
-- app_name: vecstash
-- model_name: mlx-community/nomicai-modernbert-embed-base-bf16
-- data_dir: /Users/you/.vecstash
-- schema_version: 1
-- documents_count: 0
-...
-
 $ vecstash status --json
-{"app_name": "vecstash", "model_name": "...", ...}
+{"app_name": "vecstash", "model_name": "BAAI/bge-m3", "model_backend": "sentence_transformers", ...}
+```
+
+### `vecstash storage [--json]`
+
+Show disk usage of local databases (SQLite and Qdrant).
+
+```bash
+$ vecstash storage
+┌────────┬────────┬──────────────────────────┐
+│ Store  │   Size │ Path                     │
+├────────┼────────┼──────────────────────────┤
+│ SQLite │ 24.0KB │ ~/.vecstash/metadata.db  │
+│ Qdrant │  1.2MB │ ~/.vecstash/qdrant       │
+│ Total  │  1.2MB │                          │
+└────────┴────────┴──────────────────────────┘
 ```
 
 ### `vecstash models show`
 
-Display the configured model and supported architecture families.
-
-```bash
-$ vecstash models show
-Configured model
-- model.name: mlx-community/nomicai-modernbert-embed-base-bf16
-- model.cache_dir: /Users/you/.vecstash/models
-- model.preload_on_start: False
-Supported architecture families (mlx_embeddings):
-- XLM-RoBERTa
-- BERT
-- ModernBERT
-...
-```
+Display the configured model, backend, and known good models.
 
 ### `vecstash models validate [--offline-only]`
 
@@ -180,7 +204,7 @@ Check if the configured model is available. With `--offline-only`, only checks t
 
 ```bash
 $ vecstash models validate --offline-only
-{"model_name": "...", "ok": true, "detail": "model resolved from local cache"}
+{"model_name": "BAAI/bge-m3", "ok": true, "detail": "model resolved from local cache"}
 ```
 
 Exit code: `0` if valid, `2` if not.
@@ -192,27 +216,49 @@ Download and cache the configured model for offline use.
 ```bash
 $ vecstash models bootstrap
 bootstrap status: ok
-- model: mlx-community/nomicai-modernbert-embed-base-bf16
+- model: BAAI/bge-m3
 - detail: model resolved (local cache and/or remote)
 ```
 
 ### `vecstash ingest <files...> [--json]`
 
-Extract text from supported files (`.txt`, `.md`, `.html`, `.pdf`) and persist metadata to SQLite.
+Extract text from supported files (`.txt`, `.md`, `.html`, `.pdf`), generate embeddings, and store in the vector index.
 
 ```bash
 $ vecstash ingest report.pdf notes.md --json
 [{"document_id": "abc123...", "source_path": "/path/to/report.pdf", "source_kind": "pdf", "metadata": {...}}, ...]
-
-$ vecstash ingest report.pdf notes.md
-Ingest extraction summary
-- /path/to/report.pdf [pdf] -> id=abc123...
-- /path/to/notes.md [md] -> id=def456...
 ```
+
+### `vecstash search <query> [--limit N] [--json]`
+
+Run a semantic similarity search across all ingested documents.
+
+```bash
+$ vecstash search "how to configure authentication" --limit 3
+```
+
+Results are displayed as Rich panels with Markdown rendering (tables, headers, lists).
+
+### `vecstash reset [--force] [--json]`
+
+Delete all indexed data (SQLite database and Qdrant vectors). Requires confirmation unless `--force` is passed.
+
+```bash
+$ vecstash reset
+This will permanently delete:
+  • SQLite database: ~/.vecstash/metadata.db
+  • Qdrant vectors:  ~/.vecstash/qdrant
+Are you sure? [y/N]: y
+Reset complete. Deleted: sqlite, qdrant
+```
+
+### `vecstash update [--check] [--json]`
+
+Check for and install updates from GitHub Releases.
 
 ### Scaffolded commands
 
-`search`, `reindex`, and `doctor` are defined but not yet implemented. They return a placeholder message.
+`reindex` and `doctor` are defined but not yet implemented. They return a placeholder message.
 
 ---
 
@@ -381,13 +427,14 @@ make launchd-uninstall
 
 | Module | Role |
 |--------|------|
-| `config.py` | `AppConfig` dataclass (frozen), TOML loading, HuggingFace model resolution via `mlx_embeddings` |
+| `config.py` | `AppConfig` dataclass (frozen), TOML loading, `ModelConfig.backend` (`"sentence_transformers"` / `"mlx"`), backend-aware `validate_model_reference()` |
+| `embedder.py` | Multi-backend: `MLXEmbedder`, `SentenceTransformerEmbedder`, `create_embedder()` factory. Lazy loading, `local_files_only=True` at runtime |
 | `extraction.py` | Text extraction from `.txt`, `.md`, `.html`, `.pdf` into `ExtractedDocument`; content hashing; text normalization |
-| `storage.py` | `StorageManager` owns `SQLiteRepository` (metadata + schema migrations) and `QdrantRepository` (vector collection) |
+| `storage.py` | `StorageManager` owns `SQLiteRepository` (metadata + schema migrations) and `QdrantRepository` (vector collection); vector dimension mismatch guard |
 | `daemon.py` | `JsonRpcServer` on a Unix socket; dispatches JSON-RPC 2.0 methods via `JsonRpcHandler` |
 | `rpc.py` | Pure JSON-RPC 2.0 helpers: parse requests, format results/errors |
 | `logging_utils.py` | JSON-structured file logging; extra fields: `command`, `event`, `method`, `client` |
-| `cli.py` | CLI entry point with subcommands: `status`, `models`, `ingest`, `search`, `reindex`, `doctor` |
+| `cli.py` | Typer + Rich CLI: `version`, `status`, `storage`, `models`, `ingest`, `search`, `update`, `reset`, `reindex`, `doctor` |
 
 ### Data flow
 
@@ -405,8 +452,9 @@ make launchd-uninstall
               ▼          │     ┌────▼────▼───┐                   ┌────▼────▼───┐
          config.toml     │     │ SQLite  Qdrant│                  │ SQLite  Qdrant│
                          │     └─────────────┘                   └─────────────┘
-                         ▼
-                   .txt .md .html .pdf
+              ▼          ▼
+         embedder.py  .txt .md .html .pdf
+         (factory)
 ```
 
 ### Storage layout

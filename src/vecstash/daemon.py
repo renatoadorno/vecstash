@@ -118,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
             model_name=config.model.name,
             cache_dir=config.model.cache_dir,
             offline_only=False,
+            backend=config.model.backend,
         )
         if not ok:
             logger.error(
