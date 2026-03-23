@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from io import StringIO
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from vecstash import cli
+from typer.testing import CliRunner
+
+from vecstash.cli import app
+
+runner = CliRunner()
 
 
 def _mock_embedder_class(config):
@@ -54,11 +57,9 @@ query_cache_size = 64
             cfg = self._write_config(base)
             txt = base / "sample.txt"
             txt.write_text("hello world", encoding="utf-8")
-            out = StringIO()
-            with patch("sys.stdout", out):
-                code = cli.main(["--config", str(cfg), "ingest", str(txt), "--json"])
-            self.assertEqual(code, 0)
-            payload = json.loads(out.getvalue().strip())
+            result = runner.invoke(app, ["--config", str(cfg), "ingest", str(txt), "--json"])
+            self.assertEqual(result.exit_code, 0)
+            payload = json.loads(result.output.strip())
             self.assertEqual(len(payload), 1)
             self.assertEqual(payload[0]["source_kind"], "txt")
 

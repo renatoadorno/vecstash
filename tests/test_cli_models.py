@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from vecstash import cli
+from typer.testing import CliRunner
+
+from vecstash.cli import app
+
+runner = CliRunner()
 
 
 class CliModelsTests(unittest.TestCase):
@@ -39,30 +42,22 @@ query_cache_size = 64
         )
         return cfg
 
-    def test_models_validate_json(self) -> None:
+    @patch("vecstash.cli.validate_model_reference", return_value=(True, "ok"))
+    def test_models_validate_json(self, _mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg = self._write_config(Path(tmp))
-            out = StringIO()
-            with (
-                patch("vecstash.cli.validate_model_reference", return_value=(True, "ok")),
-                patch("sys.stdout", out),
-            ):
-                code = cli.main(["--config", str(cfg), "models", "validate", "--offline-only"])
-            self.assertEqual(code, 0)
-            payload = json.loads(out.getvalue().strip())
+            result = runner.invoke(app, ["--config", str(cfg), "models", "validate", "--offline-only"])
+            self.assertEqual(result.exit_code, 0)
+            payload = json.loads(result.output.strip())
             self.assertTrue(payload["ok"])
             self.assertTrue(payload["offline_only"])
 
-    def test_models_bootstrap_failure_code(self) -> None:
+    @patch("vecstash.cli.validate_model_reference", return_value=(False, "missing"))
+    def test_models_bootstrap_failure_code(self, _mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg = self._write_config(Path(tmp))
-            out = StringIO()
-            with (
-                patch("vecstash.cli.validate_model_reference", return_value=(False, "missing")),
-                patch("sys.stdout", out),
-            ):
-                code = cli.main(["--config", str(cfg), "models", "bootstrap", "--json"])
-            self.assertEqual(code, 2)
+            result = runner.invoke(app, ["--config", str(cfg), "models", "bootstrap", "--json"])
+            self.assertEqual(result.exit_code, 2)
 
 
 if __name__ == "__main__":
