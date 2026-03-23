@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json as json_module
+import shutil
 import sys
 from pathlib import Path
 from typing import Annotated, Optional
+
+import vecstash
 
 import typer
 from rich.console import Console
@@ -46,6 +49,7 @@ def _main_callback(
 ):
     """Offline semantic storage and search for macOS ARM."""
     _state.config_path = config
+    _state.config = None
 
 
 def _get_config() -> AppConfig:
@@ -346,6 +350,115 @@ def update(
         raise typer.Exit(code=1)
 
     console.print(f"[green]Updated to v{info.latest_version}.[/green]")
+
+
+# ── version ───────────────────────────────────────────────────────────
+
+
+@app.command()
+def version(
+    json: Annotated[bool, typer.Option("--json", help="Emit as JSON.")] = False,
+):
+    """Show vecstash version."""
+    ver = vecstash.__version__
+    if json:
+        print(json_module.dumps({"version": ver}))
+        raise typer.Exit()
+    console.print(f"vecstash [green]v{ver}[/green]")
+
+
+# ── storage ──────────────────────────────────────────────────────────
+
+
+def _dir_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def _human_size(nbytes: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if nbytes < 1024:
+            return f"{nbytes:.1f} {unit}"
+        nbytes /= 1024
+    return f"{nbytes:.1f} TB"
+
+
+@app.command()
+def storage(
+    json: Annotated[bool, typer.Option("--json", help="Emit as JSON.")] = False,
+):
+    """Show disk usage of local databases."""
+    config = _get_config()
+    sqlite_bytes = config.paths.sqlite_path.stat().st_size if config.paths.sqlite_path.exists() else 0
+    qdrant_bytes = _dir_size(config.paths.qdrant_path)
+    total_bytes = sqlite_bytes + qdrant_bytes
+
+    payload = {
+        "sqlite_path": str(config.paths.sqlite_path),
+        "sqlite_bytes": sqlite_bytes,
+        "qdrant_path": str(config.paths.qdrant_path),
+        "qdrant_bytes": qdrant_bytes,
+        "total_bytes": total_bytes,
+    }
+    if json:
+        print(json_module.dumps(payload))
+        raise typer.Exit()
+
+    table = Table(title="vecstash storage", show_header=False)
+    table.add_column("Store", style="cyan")
+    table.add_column("Size", justify="right")
+    table.add_column("Path", style="dim")
+    table.add_row("SQLite", _human_size(sqlite_bytes), str(config.paths.sqlite_path))
+    table.add_row("Qdrant", _human_size(qdrant_bytes), str(config.paths.qdrant_path))
+    table.add_row("[bold]Total[/bold]", f"[bold]{_human_size(total_bytes)}[/bold]", "")
+    console.print(table)
+
+
+# ── reset ────────────────────────────────────────────────────────────
+
+
+@app.command()
+def reset(
+    force: Annotated[bool, typer.Option("--force", help="Skip confirmation prompt.")] = False,
+    json: Annotated[bool, typer.Option("--json", help="Emit as JSON.")] = False,
+):
+    """Delete all indexed data (SQLite database and Qdrant vectors)."""
+    config = _get_config()
+    sqlite_path = config.paths.sqlite_path
+    qdrant_path = config.paths.qdrant_path
+
+    sqlite_exists = sqlite_path.exists()
+    qdrant_exists = qdrant_path.exists()
+
+    if not sqlite_exists and not qdrant_exists:
+        if json:
+            print(json_module.dumps({"status": "nothing_to_reset"}))
+        else:
+            console.print("[yellow]Nothing to reset — no databases found.[/yellow]")
+        raise typer.Exit()
+
+    if not force:
+        console.print("[bold red]This will permanently delete:[/bold red]")
+        if sqlite_exists:
+            console.print(f"  • SQLite database: {sqlite_path}")
+        if qdrant_exists:
+            console.print(f"  • Qdrant vectors:  {qdrant_path}")
+        typer.confirm("Are you sure?", abort=True)
+
+    deleted = []
+    if sqlite_exists:
+        sqlite_path.unlink()
+        deleted.append("sqlite")
+    if qdrant_exists:
+        shutil.rmtree(qdrant_path)
+        deleted.append("qdrant")
+
+    if json:
+        print(json_module.dumps({"status": "reset_complete", "deleted": deleted}))
+        raise typer.Exit()
+
+    console.print("[green]Reset complete.[/green] Deleted: " + ", ".join(deleted))
 
 
 # ── scaffolded ────────────────────────────────────────────────────────
