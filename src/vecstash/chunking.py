@@ -17,7 +17,7 @@ class Chunk:
     chunk_index: int
 
 
-def chunk_document(doc: ExtractedDocument, min_chars: int = 50) -> list[Chunk]:
+def chunk_document(doc: ExtractedDocument, min_chars: int = 100) -> list[Chunk]:
     """Split a document into paragraph-level chunks."""
     paragraphs = _PARAGRAPH_SPLIT.split(doc.text)
     chunks: list[Chunk] = []

@@ -28,8 +28,8 @@ def _make_doc(text: str) -> ExtractedDocument:
 class ChunkDocumentTests(unittest.TestCase):
     def test_splits_on_double_newline(self) -> None:
         doc = _make_doc(
-            "First paragraph with more than enough characters to pass the filter.\n\n"
-            "Second paragraph also has more than enough characters to pass the filter."
+            "First paragraph with more than enough characters to comfortably pass the minimum character filter threshold.\n\n"
+            "Second paragraph also has more than enough characters to comfortably pass the minimum character filter threshold."
         )
         chunks = chunk_document(doc)
         self.assertEqual(len(chunks), 2)
@@ -37,7 +37,7 @@ class ChunkDocumentTests(unittest.TestCase):
         self.assertIn("Second paragraph", chunks[1].text)
 
     def test_filters_short_paragraphs(self) -> None:
-        doc = _make_doc("Short\n\nThis paragraph is long enough to pass the minimum character filter easily.")
+        doc = _make_doc("Short\n\nThis paragraph is long enough to pass the minimum character filter easily and comfortably exceeds the threshold.")
         chunks = chunk_document(doc)
         self.assertEqual(len(chunks), 1)
         self.assertIn("long enough", chunks[0].text)
@@ -55,9 +55,9 @@ class ChunkDocumentTests(unittest.TestCase):
     def test_chunk_index_is_sequential(self) -> None:
         doc = _make_doc(
             "Short\n\n"
-            "First real paragraph with plenty of characters for the filter.\n\n"
+            "First real paragraph with plenty of characters for the filter and enough to exceed the minimum threshold.\n\n"
             "Also short\n\n"
-            "Second real paragraph also has enough characters to pass."
+            "Second real paragraph also has enough characters to pass the filter and exceed the minimum threshold."
         )
         chunks = chunk_document(doc)
         self.assertEqual(len(chunks), 2)
@@ -74,7 +74,7 @@ class ChunkDocumentTests(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
 
     def test_chunk_document_id_matches_source(self) -> None:
-        doc = _make_doc("Long enough paragraph to pass the minimum character limit for chunking.")
+        doc = _make_doc("Long enough paragraph to pass the minimum character limit for chunking and comfortably exceed the threshold.")
         chunks = chunk_document(doc)
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0].document_id, "abc123")
