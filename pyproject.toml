@@ -1,7 +1,7 @@
 [project]
 name = "vecstash"
 version = "0.1.0"
-description = "Offline semantic storage and search for macOS ARM"
+description = "Local semantic storage and search for macOS"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"

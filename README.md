@@ -37,18 +37,56 @@ make bootstrap      # Download the embedding model
 make launchd-install  # Set up daemon auto-start
 ```
 
-## Quick Start
+## Usage
+
+### Ingest documents
+
+Extract and store documents for semantic search:
+
+```bash
+vecstash ingest report.pdf notes.md design.html
+
+# JSON output
+vecstash ingest report.pdf --json
+```
+
+Supported formats: `.txt`, `.md`, `.html`, `.pdf`
+
+### Search
+
+Run a semantic search across all ingested documents:
+
+```bash
+# Search with natural language
+vecstash search "how to configure authentication"
+
+# Limit results
+vecstash search "database migrations" --top-k 5
+
+# JSON output for scripting
+vecstash search "error handling" --json
+```
+
+### Via daemon (JSON-RPC 2.0)
+
+The daemon exposes the same operations over a Unix socket:
+
+```bash
+# Healthcheck
+printf '{"jsonrpc":"2.0","id":1,"method":"healthcheck","params":{}}\n' \
+  | nc -U ~/.vecstash/daemon.sock
+
+# Search via daemon
+printf '{"jsonrpc":"2.0","id":1,"method":"search","params":{"query":"authentication","top_k":5}}\n' \
+  | nc -U ~/.vecstash/daemon.sock
+```
+
+### Other commands
 
 ```bash
 vecstash status                        # Show configuration and storage status
 vecstash models show                   # Show model info and supported architectures
-vecstash ingest report.pdf notes.md    # Extract and store documents
-```
-
-Test the daemon:
-
-```bash
-printf '{"jsonrpc":"2.0","id":1,"method":"healthcheck","params":{}}\n' | nc -U ~/.vecstash/daemon.sock
+vecstash models bootstrap              # Download model for offline use
 ```
 
 Uninstall:
