@@ -9,7 +9,7 @@ import unicodedata
 
 from bs4 import BeautifulSoup, NavigableString
 from markdown_it import MarkdownIt
-from pypdf import PdfReader
+import pymupdf
 
 _WS_RE = re.compile(r"[ \t\f\v]+")
 _MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
@@ -151,13 +151,34 @@ def _extract_md(path: Path) -> str:
     rendered_html = MarkdownIt("commonmark").render(raw)
     return _extract_html_from_text(rendered_html)
 
+def extract_structured_html(soup):
+    result = []
+
+    for tag in soup.find_all(["h1", "h2", "h3", "p", "li"]):
+        text = tag.get_text(strip=True)
+
+        if not text:
+            continue
+
+        if tag.name == "h1":
+            result.append(f"# {text}")
+        elif tag.name == "h2":
+            result.append(f"## {text}")
+        elif tag.name == "h3":
+            result.append(f"### {text}")
+        elif tag.name == "li":
+            result.append(f"- {text}")
+        else:
+            result.append(text)
+
+    return "\n".join(result)
 
 def _extract_html_from_text(raw_html: str) -> str:
     soup = BeautifulSoup(raw_html, "html.parser")
     _linearize_html_tables(soup)
     for tag in soup(["script", "style", "noscript", "template"]):
         tag.decompose()
-    return soup.get_text(separator="\n")
+    return extract_structured_html(soup)
 
 
 def _extract_html(path: Path) -> str:
@@ -165,16 +186,19 @@ def _extract_html(path: Path) -> str:
 
 
 def _extract_pdf(path: Path) -> str:
-    reader = PdfReader(str(path))
-    if reader.is_encrypted:
-        raise ValueError(f"Encrypted PDF is not supported: {path}")
+    doc = pymupdf.open(str(path))
+    try:
+        if doc.is_encrypted:
+            raise ValueError(f"Encrypted PDF is not supported: {path}")
 
-    page_texts: list[str] = []
-    for page in reader.pages:
-        text = page.extract_text() or ""
-        if text.strip():
+        page_texts: list[str] = []
+        for page in doc:
+            text = page.get_text("text")
             page_texts.append(text)
-    return "\n\n".join(page_texts)
+
+        return "\n\n".join(page_texts)
+    finally:
+        doc.close()
 
 
 def _resolve_source_kind(path: Path) -> str:
@@ -184,6 +208,11 @@ def _resolve_source_kind(path: Path) -> str:
         raise ValueError(f"Unsupported file type for {path}. Supported suffixes: {supported}")
     return kind
 
+def split_sections(text: str) -> list[str]:
+    return re.split(r"\n#{1,3} ", text)
+
+def ensure_sentence_spacing(text: str) -> str:
+    return re.sub(r"(?<!\n)\n(?!\n)", ".\n\n", text)
 
 def extract_file(path: Path) -> ExtractedDocument:
     source_path = path.expanduser().resolve()
@@ -203,6 +232,7 @@ def extract_file(path: Path) -> ExtractedDocument:
         raw_text = _extract_pdf(source_path)
 
     text = normalize_text(raw_text)
+    text = ensure_sentence_spacing(text)
     content_hash = sha256(text.encode("utf-8")).hexdigest()
     doc_id_material = f"{source_path}:{content_hash}"
     document_id = sha256(doc_id_material.encode("utf-8")).hexdigest()

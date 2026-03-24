@@ -1,6 +1,6 @@
 [project]
 name = "vecstash"
-version = "0.1.8"
+version = "0.1.9"
 description = "Local semantic storage and search for macOS"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -22,7 +22,9 @@ classifiers = [
 ]
 dependencies = [
     "beautifulsoup4>=4.14.3",
+    "langchain-text-splitters>=1.1.1",
     "markdown-it-py>=4.0.0",
+    "pymupdf>=1.27.2.2",
     "pypdf>=6.9.1",
     "qdrant-client>=1.17.1",
     "sentence-transformers>=3.0",
