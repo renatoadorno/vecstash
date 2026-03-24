@@ -56,26 +56,29 @@ def _linearize_md_tables(raw: str) -> str:
     """Convert markdown tables to linear text before HTML rendering."""
 
     def _replace_table(match: re.Match) -> str:
-        block = match.group(0)
-        lines = [ln for ln in block.strip().split("\n") if ln.strip()]
-        non_sep = [ln for ln in lines if not _MD_SEPARATOR_LINE_RE.match(ln)]
-        if len(non_sep) < 2:
-            return block
-        headers = _parse_md_row(non_sep[0])
-        data_rows = [_parse_md_row(ln) for ln in non_sep[1:]]
-        result_lines: list[str] = []
-        for row in data_rows:
-            if len(headers) == 2 and len(row) >= 2:
-                result_lines.append(f"{row[0]}: {row[1]}")
-            else:
-                parts = []
-                for i, cell in enumerate(row):
-                    if i < len(headers):
-                        parts.append(f"{headers[i]}: {cell}")
-                    else:
-                        parts.append(cell)
-                result_lines.append(", ".join(parts))
-        return "\n".join(result_lines)
+        lines = [
+            ln for ln in match.group(0).split("\n")
+            if ln.strip() and not _MD_SEPARATOR_LINE_RE.match(ln)
+        ]
+
+        if len(lines) < 2:
+            return match.group(0)
+
+        headers = _parse_md_row(lines[0])
+        rows = [_parse_md_row(ln) for ln in lines[1:]]
+
+        result = []
+
+        for row in rows:
+            pairs = []
+
+            for i, cell in enumerate(row):
+                key = headers[i] if i < len(headers) else f"col_{i}"
+                pairs.append(f"{key}: {cell}")
+
+            result.append("\n".join(pairs))
+
+        return "\n\n".join(result)
 
     return _MD_TABLE_BLOCK_RE.sub(_replace_table, raw)
 

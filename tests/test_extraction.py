@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from pypdf import PdfWriter
 
@@ -63,6 +64,20 @@ class ExtractionTests(unittest.TestCase):
             self.assertEqual(doc.source_kind, "pdf")
             self.assertIsInstance(doc.text, str)
 
+    def test_extract_pdf_encrypted_raises_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "encrypted.pdf"
+            path.write_bytes(b"%PDF-1.4\n%%EOF")
+
+            mock_doc = MagicMock()
+            mock_doc.is_encrypted = True
+
+            with patch("vecstash.extraction.pymupdf.open", return_value=mock_doc):
+                with self.assertRaises(ValueError):
+                    extract_file(path)
+
+            mock_doc.close.assert_called_once()
+
     def test_unsupported_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sample.csv"
@@ -75,12 +90,12 @@ class LinearizeMdTablesTests(unittest.TestCase):
     def test_two_columns(self) -> None:
         md = "| Command | Description |\n|---------|-------------|\n| :q | Quit |\n| :w | Save |"
         result = _linearize_md_tables(md)
-        self.assertEqual(result, ":q: Quit\n:w: Save")
+        self.assertEqual(result, "Command: :q\nDescription: Quit\n\nCommand: :w\nDescription: Save")
 
     def test_multi_columns(self) -> None:
         md = "| Name | Age | City |\n|------|-----|------|\n| Alice | 30 | SP |\n| Bob | 25 | RJ |"
         result = _linearize_md_tables(md)
-        self.assertEqual(result, "Name: Alice, Age: 30, City: SP\nName: Bob, Age: 25, City: RJ")
+        self.assertEqual(result, "Name: Alice\nAge: 30\nCity: SP\n\nName: Bob\nAge: 25\nCity: RJ")
 
     def test_no_tables(self) -> None:
         md = "Just regular text\n\nWith paragraphs."
@@ -90,18 +105,19 @@ class LinearizeMdTablesTests(unittest.TestCase):
     def test_strips_backticks_from_cells(self) -> None:
         md = "| Cmd | Desc |\n|-----|------|\n| `:q` | Quit |\n| `:w` | Save |"
         result = _linearize_md_tables(md)
-        self.assertEqual(result, ":q: Quit\n:w: Save")
+        self.assertEqual(result, "Cmd: :q\nDesc: Quit\n\nCmd: :w\nDesc: Save")
         self.assertNotIn("`", result)
 
     def test_strips_bold_from_cells(self) -> None:
         md = "| Key | Val |\n|-----|-----|\n| **a** | one |"
         result = _linearize_md_tables(md)
-        self.assertEqual(result, "a: one")
+        self.assertEqual(result, "Key: a\nVal: one")
 
     def test_table_with_surrounding_text(self) -> None:
         md = "Before\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nAfter"
         result = _linearize_md_tables(md)
-        self.assertIn("1: 2", result)
+        self.assertIn("A: 1", result)
+        self.assertIn("B: 2", result)
         self.assertIn("Before", result)
         self.assertIn("After", result)
 
@@ -156,8 +172,10 @@ class ExtractMdWithTablesTests(unittest.TestCase):
                 encoding="utf-8",
             )
             doc = extract_file(path)
-            self.assertIn(":q: Quit", doc.text)
-            self.assertIn(":w: Save", doc.text)
+            self.assertIn("Cmd: :q", doc.text)
+            self.assertIn("Desc: Quit", doc.text)
+            self.assertIn("Cmd: :w", doc.text)
+            self.assertIn("Desc: Save", doc.text)
             self.assertNotIn("|---|", doc.text)
 
 
@@ -171,7 +189,7 @@ class ExtractHtmlWithTablesTests(unittest.TestCase):
                 encoding="utf-8",
             )
             doc = extract_file(path)
-            self.assertIn("1: 2", doc.text)
+            self.assertEqual(doc.text, "Intro.\n\nEnd")
             self.assertNotIn("<table>", doc.text)
 
 
