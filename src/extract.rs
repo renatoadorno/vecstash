@@ -216,6 +216,7 @@ fn has_table_ancestor(element: scraper::ElementRef<'_>) -> bool {
     false
 }
 
+#[cfg(test)]
 pub fn linearize_html_tables(html: &str) -> String {
     let document = Html::parse_document(html);
     let table_selector = Selector::parse("table").expect("valid selector");

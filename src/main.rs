@@ -5,6 +5,7 @@ mod embed;
 mod extract;
 mod logging;
 mod output;
+mod pipeline;
 mod store;
 mod update;
 

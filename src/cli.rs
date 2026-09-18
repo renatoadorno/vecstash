@@ -106,8 +106,10 @@ pub fn run() -> Result<ExitCode> {
         Command::Storage => crate::store::cmd_storage(&config, format),
         Command::Reset { force } => crate::store::cmd_reset(&config, force, format),
         Command::Models { command } => models(&config, command, format),
-        Command::Ingest { inputs } => crate::embed::cmd_ingest(&config, &inputs, format),
-        Command::Search { query, limit } => crate::embed::cmd_search(&config, &query, limit, format),
+        Command::Ingest { inputs } => crate::pipeline::cmd_ingest(&config, &inputs, format),
+        Command::Search { query, limit } => {
+            crate::pipeline::cmd_search(&config, &query, limit, format)
+        }
         Command::Update { check } => crate::update::cmd_update(check, format),
     }
 }

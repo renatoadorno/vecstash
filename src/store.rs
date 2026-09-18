@@ -311,7 +311,7 @@ pub fn encode_vector(vector: &[f32]) -> Vec<u8> {
 }
 
 pub fn decode_vector(bytes: &[u8]) -> Result<Vec<f32>> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         bail!("Corrupt embedding blob: {} bytes is not a multiple of 4", bytes.len());
     }
     let mut vector = Vec::with_capacity(bytes.len() / 4);

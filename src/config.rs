@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_MODEL: &str = "Xenova/bge-m3";
-pub const DEFAULT_ONNX_FILE: &str = "onnx/model_quantized.onnx";
+pub const DEFAULT_ONNX_FILE: &str = "onnx/model_fp16.onnx";
 pub const DEFAULT_CHUNK_TOKENS: usize = 512;
 pub const DEFAULT_CHUNK_OVERLAP: usize = 64;
 pub const DEFAULT_MAX_BATCH_SIZE: usize = 64;

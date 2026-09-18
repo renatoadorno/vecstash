@@ -49,6 +49,7 @@ pub fn chunk_with_tokenizer(
     Ok(assemble(&doc.document_id, pieces))
 }
 
+#[cfg(test)]
 pub fn chunk_with_chars(
     doc: &ExtractedDocument,
     chunk_chars: usize,
