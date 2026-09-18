@@ -91,11 +91,37 @@ fn status_creates_the_config_when_missing() {
     command
         .arg("--config")
         .arg(&config_path)
+        .arg("version")
+        .assert()
+        .success();
+
+    let mut command = Command::cargo_bin("vecstash").expect("binary builds");
+    command
+        .arg("--config")
+        .arg(&config_path)
         .arg("status")
         .arg("--json")
+        .env("HOME", dir.path())
         .assert()
         .success();
     assert!(config_path.exists(), "config must be created on first run");
+}
+
+#[test]
+fn a_database_from_the_python_era_is_rejected() {
+    let fixture = fixture();
+    run(&fixture, &["status"]).success();
+
+    let db = fixture.data_dir.join("metadata.db");
+    let conn = rusqlite::Connection::open(&db).expect("open");
+    conn.execute("CREATE TABLE ingestion_jobs (job_id TEXT PRIMARY KEY)", [])
+        .expect("create legacy table");
+    drop(conn);
+
+    run(&fixture, &["status"])
+        .failure()
+        .stderr(predicates::str::contains("0.1.x"))
+        .stderr(predicates::str::contains("vecstash reset"));
 }
 
 #[test]

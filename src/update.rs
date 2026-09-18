@@ -3,7 +3,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use semver::Version;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::process::ExitCode;
 
 const GITHUB_REPO: &str = "renatoadorno/vecstash";
@@ -124,18 +124,25 @@ fn install(info: &ReleaseInfo) -> Result<()> {
     let checksum = String::from_utf8(checksum).context("The checksum file is not valid UTF-8")?;
     verify_checksum(&binary, &checksum)?;
 
-    let staged = std::env::temp_dir().join(format!("vecstash-{}", info.latest_version));
-    std::fs::write(&staged, &binary)
-        .with_context(|| format!("Cannot stage the new binary at {}", staged.display()))?;
+    let exe = std::env::current_exe().context("Cannot locate the running binary")?;
+    let staging_dir = exe.parent().unwrap_or_else(|| std::path::Path::new("."));
+
+    let mut staged = tempfile::Builder::new()
+        .prefix(".vecstash-update-")
+        .tempfile_in(staging_dir)
+        .with_context(|| format!("Cannot stage the new binary in {}", staging_dir.display()))?;
+    staged
+        .write_all(&binary)
+        .context("Cannot write the staged binary")?;
+    staged.flush().context("Cannot flush the staged binary")?;
 
     use std::os::unix::fs::PermissionsExt;
-    let mut permissions = std::fs::metadata(&staged)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&staged, permissions)?;
+    let staged = staged.into_temp_path();
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
+        .context("Cannot mark the staged binary executable")?;
 
     self_replace::self_replace(&staged)
         .map_err(|e| anyhow!("Cannot replace the running binary: {e}"))?;
-    let _ = std::fs::remove_file(&staged);
     Ok(())
 }
 
@@ -144,7 +151,7 @@ pub fn cmd_update(check: bool, format: Format) -> Result<ExitCode> {
 
     if !info.update_available {
         match format {
-            Format::Json => output::print_json(&info)?,
+            Format::Json => output::print_json(&report(&info, "up_to_date"))?,
             Format::Human => {
                 output::print_success(&format!("vecstash {} is up to date.", info.current_version))
             }
@@ -154,7 +161,7 @@ pub fn cmd_update(check: bool, format: Format) -> Result<ExitCode> {
 
     if check {
         match format {
-            Format::Json => output::print_json(&info)?,
+            Format::Json => output::print_json(&report(&info, "checked"))?,
             Format::Human => output::print_line(&format!(
                 "Update available: {} -> {}\n{}",
                 info.current_version, info.latest_version, info.release_url
@@ -166,13 +173,31 @@ pub fn cmd_update(check: bool, format: Format) -> Result<ExitCode> {
     install(&info)?;
 
     match format {
-        Format::Json => output::print_json(&info)?,
+        Format::Json => output::print_json(&report(&info, "installed"))?,
         Format::Human => output::print_success(&format!(
             "Updated {} -> {}",
             info.current_version, info.latest_version
         )),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn report(info: &ReleaseInfo, action: &str) -> serde_json::Value {
+    let ReleaseInfo {
+        current_version,
+        latest_version,
+        update_available,
+        release_url,
+        asset_url: _,
+        checksum_url: _,
+    } = info;
+    serde_json::json!({
+        "action": action,
+        "current_version": current_version,
+        "latest_version": latest_version,
+        "update_available": update_available,
+        "release_url": release_url,
+    })
 }
 
 #[cfg(test)]
