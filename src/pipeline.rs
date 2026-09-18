@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Serialize)]
-struct IngestReport {
+struct IndexedDocument {
     document_id: String,
     source_path: String,
     source_kind: String,
@@ -21,31 +21,84 @@ struct IngestReport {
     indexed: bool,
 }
 
-fn extract_all(inputs: &[PathBuf]) -> (Vec<ExtractedDocument>, Vec<String>) {
-    let results: Vec<Result<ExtractedDocument>> = inputs
+#[derive(Serialize)]
+struct FailedDocument {
+    source_path: String,
+    error: String,
+}
+
+#[derive(Serialize)]
+struct IngestReport {
+    indexed: Vec<IndexedDocument>,
+    failed: Vec<FailedDocument>,
+}
+
+fn extract_all(inputs: &[PathBuf]) -> (Vec<ExtractedDocument>, Vec<FailedDocument>) {
+    let results: Vec<(PathBuf, Result<ExtractedDocument>)> = inputs
         .par_iter()
-        .map(|path| extract::extract_file(path))
+        .map(|path| (path.clone(), extract::extract_file(path)))
         .collect();
 
     let mut documents = Vec::new();
-    let mut failures = Vec::new();
-    for result in results {
+    let mut failed = Vec::new();
+    for (path, result) in results {
         match result {
             Ok(document) => documents.push(document),
-            Err(e) => failures.push(e.to_string()),
+            Err(e) => failed.push(FailedDocument {
+                source_path: path.display().to_string(),
+                error: e.to_string(),
+            }),
         }
     }
-    (documents, failures)
+    (documents, failed)
+}
+
+fn emit_ingest(report: &IngestReport, format: Format) -> Result<()> {
+    match format {
+        Format::Json => output::print_json(report)?,
+        Format::Human => {
+            for failure in &report.failed {
+                output::print_warning(&format!("{}: {}", failure.source_path, failure.error));
+            }
+            if report.indexed.is_empty() {
+                return Ok(());
+            }
+            let mut table = Table::new();
+            table.load_style(presets::UTF8_FULL);
+            table.set_header(vec!["File", "Kind", "Chunks", "Indexed"]);
+            for document in &report.indexed {
+                let IndexedDocument {
+                    document_id: _,
+                    source_path,
+                    source_kind,
+                    chunks,
+                    indexed,
+                } = document;
+                table.add_row(vec![
+                    file_label(source_path),
+                    source_kind.clone(),
+                    chunks.to_string(),
+                    indexed.to_string(),
+                ]);
+            }
+            output::print_line(&table.to_string());
+        }
+    }
+    Ok(())
 }
 
 pub fn cmd_ingest(config: &AppConfig, inputs: &[PathBuf], format: Format) -> Result<ExitCode> {
-    let (documents, failures) = extract_all(inputs);
-    for failure in &failures {
-        output::print_warning(failure);
-    }
+    let (documents, failed) = extract_all(inputs);
 
     if documents.is_empty() {
-        output::print_warning("No documents were extracted.");
+        let report = IngestReport {
+            indexed: Vec::new(),
+            failed,
+        };
+        emit_ingest(&report, format)?;
+        if let Format::Human = format {
+            output::print_warning("No documents were extracted.");
+        }
         return Ok(ExitCode::from(1));
     }
 
@@ -53,15 +106,15 @@ pub fn cmd_ingest(config: &AppConfig, inputs: &[PathBuf], format: Format) -> Res
     let tokenizer = embed::load_chunk_tokenizer(config)?;
 
     let mut store = Store::open(&config.paths.sqlite_path)?;
-    store.ensure_dimension(embedder.dim())?;
+    store.ensure_dimension(embedder.dim()?)?;
 
-    let mut reports = Vec::with_capacity(documents.len());
+    let mut indexed = Vec::with_capacity(documents.len());
     for document in &documents {
         store.upsert_document(document)?;
 
         let chunks = chunk::chunk_with_tokenizer(
             document,
-            tokenizer.clone(),
+            &tokenizer,
             config.runtime.chunk_tokens,
             config.runtime.chunk_overlap,
         )?;
@@ -71,7 +124,7 @@ pub fn cmd_ingest(config: &AppConfig, inputs: &[PathBuf], format: Format) -> Res
             texts.push(item.text.clone());
         }
 
-        let indexed = match embedder.embed(&texts, config.runtime.max_batch_size) {
+        let embedded = match embedder.embed(&texts, config.runtime.max_batch_size) {
             Ok(vectors) => {
                 store.replace_chunks(&document.document_id, &chunks, &vectors)?;
                 true
@@ -86,40 +139,35 @@ pub fn cmd_ingest(config: &AppConfig, inputs: &[PathBuf], format: Format) -> Res
             }
         };
 
-        reports.push(IngestReport {
+        indexed.push(IndexedDocument {
             document_id: document.document_id.clone(),
             source_path: document.source_path.clone(),
             source_kind: document.source_kind.clone(),
             chunks: chunks.len(),
-            indexed,
+            indexed: embedded,
         });
     }
 
-    match format {
-        Format::Json => output::print_json(&reports)?,
-        Format::Human => {
-            let mut table = Table::new();
-            table.load_style(presets::UTF8_FULL);
-            table.set_header(vec!["File", "Kind", "Chunks", "Indexed"]);
-            for report in &reports {
-                let IngestReport {
-                    document_id: _,
-                    source_path,
-                    source_kind,
-                    chunks,
-                    indexed,
-                } = report;
-                table.add_row(vec![
-                    file_label(source_path),
-                    source_kind.clone(),
-                    chunks.to_string(),
-                    indexed.to_string(),
-                ]);
-            }
-            output::print_line(&table.to_string());
+    let mut all_indexed = true;
+    for document in &indexed {
+        if !document.indexed {
+            all_indexed = false;
         }
     }
 
+    let report = IngestReport { indexed, failed };
+    let partial = !report.failed.is_empty() || !all_indexed;
+    emit_ingest(&report, format)?;
+
+    tracing::info!(
+        event = "ingest_finished",
+        documents = report.indexed.len(),
+        failed = report.failed.len(),
+    );
+
+    if partial {
+        return Ok(ExitCode::from(1));
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -131,12 +179,26 @@ fn file_label(path: &str) -> String {
 }
 
 #[derive(Serialize)]
-struct SearchReport {
+struct SearchResult {
     score: f32,
     document_id: String,
     source_path: String,
     chunk_index: i64,
     chunk_text: String,
+}
+
+fn empty_index(format: Format) -> Result<ExitCode> {
+    match format {
+        Format::Json => output::print_json(&serde_json::json!({
+            "status": "empty_index",
+            "hint": "Run 'vecstash ingest <files>' first.",
+            "results": [],
+        }))?,
+        Format::Human => {
+            output::print_warning("No documents indexed yet. Run 'vecstash ingest <files>' first.")
+        }
+    }
+    Ok(ExitCode::from(1))
 }
 
 pub fn cmd_search(
@@ -147,20 +209,18 @@ pub fn cmd_search(
 ) -> Result<ExitCode> {
     let store = Store::open(&config.paths.sqlite_path)?;
     if store.chunks_count()? == 0 {
-        output::print_warning("No documents indexed yet. Run 'vecstash ingest <files>' first.");
-        return Ok(ExitCode::from(1));
+        return empty_index(format);
     }
 
     let mut embedder = Embedder::load(config)?;
     let vectors = embedder.embed(&[query.to_string()], 1)?;
     let Some(query_vector) = vectors.first() else {
-        output::print_warning("Query produced no embedding.");
-        return Ok(ExitCode::from(1));
+        return empty_index(format);
     };
 
     let hits = store.search(query_vector, limit)?;
 
-    let mut reports = Vec::with_capacity(hits.len());
+    let mut results = Vec::with_capacity(hits.len());
     for hit in &hits {
         let SearchHit {
             score,
@@ -169,7 +229,7 @@ pub fn cmd_search(
             chunk_text,
             chunk_index,
         } = hit;
-        reports.push(SearchReport {
+        results.push(SearchResult {
             score: *score,
             document_id: document_id.clone(),
             source_path: source_path.clone(),
@@ -179,25 +239,25 @@ pub fn cmd_search(
     }
 
     match format {
-        Format::Json => output::print_json(&reports)?,
+        Format::Json => output::print_json(&results)?,
         Format::Human => {
-            if reports.is_empty() {
+            if results.is_empty() {
                 output::print_warning("No results.");
                 return Ok(ExitCode::SUCCESS);
             }
             let skin = termimad::MadSkin::default();
-            for report in &reports {
-                let score = format!("{:.3}", report.score);
-                let label = file_label(&report.source_path);
-                let header = if report.score > 0.8 {
+            for result in &results {
+                let score = format!("{:.3}", result.score);
+                let label = file_label(&result.source_path);
+                let header = if result.score > 0.8 {
                     format!("{} {}", score.green().bold(), label.bold())
-                } else if report.score > 0.5 {
+                } else if result.score > 0.5 {
                     format!("{} {}", score.yellow().bold(), label.bold())
                 } else {
                     format!("{} {}", score.red().bold(), label.bold())
                 };
                 output::print_line(&header);
-                output::print_line(&skin.text(&report.chunk_text, None).to_string());
+                output::print_line(&skin.text(&result.chunk_text, None).to_string());
             }
         }
     }

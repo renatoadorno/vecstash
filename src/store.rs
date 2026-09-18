@@ -41,6 +41,7 @@ impl Store {
         }
         let conn = Connection::open(path)
             .with_context(|| format!("Cannot open database {}", path.display()))?;
+        restrict_permissions(path);
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -50,7 +51,41 @@ impl Store {
         Ok(store)
     }
 
+    fn reject_foreign_database(&self) -> Result<()> {
+        let legacy: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'table' AND name IN ('ingestion_jobs', 'chunk_index_state')",
+            [],
+            |row| row.get(0),
+        )?;
+        if legacy > 0 {
+            bail!(
+                "This index was created by vecstash 0.1.x, whose data is not compatible. \
+                 Run 'vecstash reset' to start a new index."
+            );
+        }
+
+        let has_migrations: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_migrations == 0 {
+            return Ok(());
+        }
+
+        let version = self.schema_version()?;
+        if version > SCHEMA_VERSION {
+            bail!(
+                "This index uses schema version {version}, but this build only understands \
+                 {SCHEMA_VERSION}. Run 'vecstash update' to get a newer vecstash."
+            );
+        }
+        Ok(())
+    }
+
     fn migrate(&self) -> Result<()> {
+        self.reject_foreign_database()?;
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
@@ -288,6 +323,18 @@ impl Store {
     }
 }
 
+/// The index holds the full text of every ingested document, so it must not be
+/// world-readable on a shared machine. Best effort: a failure here is not fatal.
+fn restrict_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(0o600);
+    let _ = fs::set_permissions(path, permissions);
+}
+
 fn file_name(path: &str) -> String {
     Path::new(path)
         .file_name()
@@ -397,6 +444,10 @@ pub fn cmd_status(config: &AppConfig, format: Format) -> Result<ExitCode> {
             table.add_row(vec!["data dir", &report.data_dir]);
             table.add_row(vec!["sqlite", &report.sqlite_path]);
             table.add_row(vec!["log", &report.log_path]);
+            table.add_row(vec!["model cache", &report.model_cache_dir]);
+            table.add_row(vec!["max batch size", &report.max_batch_size.to_string()]);
+            table.add_row(vec!["chunk tokens", &report.chunk_tokens.to_string()]);
+            table.add_row(vec!["chunk overlap", &report.chunk_overlap.to_string()]);
             table.add_row(vec!["schema version", &schema_version.to_string()]);
             table.add_row(vec![
                 "vector dim",
@@ -481,11 +532,26 @@ pub fn cmd_reset(config: &AppConfig, force: bool, format: Format) -> Result<Exit
     }
 
     if !force {
-        output::print_line("The following will be deleted:");
-        for target in &targets {
-            output::print_line(&format!("  {}", target.display()));
+        match format {
+            Format::Json => {
+                let mut listed = Vec::with_capacity(targets.len());
+                for target in &targets {
+                    listed.push(target.display().to_string());
+                }
+                output::print_json(&serde_json::json!({
+                    "status": "confirmation_required",
+                    "targets": listed,
+                    "hint": "Re-run with --force to confirm.",
+                }))?;
+            }
+            Format::Human => {
+                output::print_line("The following will be deleted:");
+                for target in &targets {
+                    output::print_line(&format!("  {}", target.display()));
+                }
+                output::print_line("Re-run with --force to confirm.");
+            }
         }
-        output::print_line("Re-run with --force to confirm.");
         return Ok(ExitCode::from(1));
     }
 

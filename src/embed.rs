@@ -13,6 +13,10 @@ use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
 const TOKENIZER_FILE: &str = "tokenizer.json";
 
+/// The chunker sizes text without special tokens; the embedder encodes with them.
+/// Without this slack a chunk that lands exactly on the cap loses its last tokens.
+const SPECIAL_TOKEN_BUDGET: usize = 2;
+
 fn hub_dir(config: &AppConfig) -> PathBuf {
     config.model.cache_dir.join("hub")
 }
@@ -55,7 +59,7 @@ fn resolve_file(config: &AppConfig, file: &str, offline_only: bool) -> Result<Pa
 pub struct Embedder {
     session: Session,
     tokenizer: Tokenizer,
-    dim: usize,
+    dim: Option<usize>,
 }
 
 impl Embedder {
@@ -66,7 +70,7 @@ impl Embedder {
         let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow!("Cannot load tokenizer: {e}"))?;
 
-        let max_length = config.runtime.chunk_tokens.max(64);
+        let max_length = config.runtime.chunk_tokens.max(64) + SPECIAL_TOKEN_BUDGET;
         tokenizer
             .with_padding(Some(PaddingParams {
                 strategy: PaddingStrategy::BatchLongest,
@@ -95,25 +99,26 @@ impl Embedder {
             .commit_from_file(&model_path)
             .map_err(|e| anyhow!("Cannot load ONNX model {}: {e}", model_path.display()))?;
 
-        let mut embedder = Embedder {
+        Ok(Embedder {
             session,
             tokenizer,
-            dim: 0,
-        };
-        embedder.dim = embedder.probe_dimension()?;
-        Ok(embedder)
+            dim: None,
+        })
     }
 
-    fn probe_dimension(&mut self) -> Result<usize> {
+    /// Runs one short forward pass the first time it is called. `search` never needs this,
+    /// so probing eagerly in `load` would double the model passes on the hottest command.
+    pub fn dim(&mut self) -> Result<usize> {
+        if let Some(dim) = self.dim {
+            return Ok(dim);
+        }
         let probe = self.forward(&["dimension probe".to_string()])?;
         let Some(first) = probe.first() else {
             bail!("Model returned no embedding for the dimension probe.");
         };
-        Ok(first.len())
-    }
-
-    pub fn dim(&self) -> usize {
-        self.dim
+        let dim = first.len();
+        self.dim = Some(dim);
+        Ok(dim)
     }
 
     fn forward(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -142,7 +147,7 @@ impl Embedder {
 
         let shape = [batch as i64, seq as i64];
         let ids_tensor = Tensor::from_array((shape, input_ids))?;
-        let mask_tensor = Tensor::from_array((shape, attention_mask.clone()))?;
+        let mask_tensor = Tensor::from_array((shape, attention_mask))?;
 
         let mut wants_token_type_ids = false;
         for input in self.session.inputs() {
@@ -189,20 +194,16 @@ impl Embedder {
                 dims.len()
             );
         }
+        if dims[0] as usize != batch {
+            bail!(
+                "Model returned {} sequences for a batch of {batch}.",
+                dims[0]
+            );
+        }
         let hidden = dims[2] as usize;
         let seq_len = dims[1] as usize;
 
-        let mut result = Vec::with_capacity(batch);
-        for index in 0..batch {
-            let start = index * seq_len * hidden;
-            let mut vector = Vec::with_capacity(hidden);
-            for offset in 0..hidden {
-                vector.push(data[start + offset]);
-            }
-            normalize_l2(&mut vector);
-            result.push(vector);
-        }
-        Ok(result)
+        Ok(pool_cls(data, batch, seq_len, hidden))
     }
 
     pub fn embed(&mut self, texts: &[String], batch_size: usize) -> Result<Vec<Vec<f32>>> {
@@ -218,6 +219,23 @@ impl Embedder {
 pub fn load_chunk_tokenizer(config: &AppConfig) -> Result<Tokenizer> {
     let path = resolve_file(config, TOKENIZER_FILE, true)?;
     Tokenizer::from_file(&path).map_err(|e| anyhow!("Cannot load tokenizer: {e}"))
+}
+
+/// Pools the `[CLS]` token — the first of each sequence — from a row-major
+/// `[batch, sequence, hidden]` tensor, then L2-normalises it. `bge-m3` is a CLS-pooling
+/// model: averaging over the sequence instead produces plausible but wrong vectors.
+fn pool_cls(data: &[f32], batch: usize, seq_len: usize, hidden: usize) -> Vec<Vec<f32>> {
+    let mut result = Vec::with_capacity(batch);
+    for index in 0..batch {
+        let start = index * seq_len * hidden;
+        let mut vector = Vec::with_capacity(hidden);
+        for offset in 0..hidden {
+            vector.push(data[start + offset]);
+        }
+        normalize_l2(&mut vector);
+        result.push(vector);
+    }
+    result
 }
 
 pub fn normalize_l2(vector: &mut [f32]) {
@@ -378,6 +396,42 @@ pub fn cmd_models_bootstrap(config: &AppConfig, format: Format) -> Result<ExitCo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pooling_takes_the_cls_token_not_the_mean() {
+        let batch = 2;
+        let seq_len = 4;
+        let hidden = 2;
+        let mut data = Vec::new();
+        for _ in 0..batch {
+            data.extend_from_slice(&[1.0, 0.0]);
+            for _ in 1..seq_len {
+                data.extend_from_slice(&[0.0, 1.0]);
+            }
+        }
+
+        let pooled = pool_cls(&data, batch, seq_len, hidden);
+
+        assert_eq!(pooled.len(), batch);
+        for vector in &pooled {
+            assert!(
+                (vector[0] - 1.0).abs() < 1e-6 && vector[1].abs() < 1e-6,
+                "expected the CLS token [1,0], got {vector:?} — mean pooling would give ~[0.32,0.95]"
+            );
+        }
+    }
+
+    #[test]
+    fn pooling_addresses_each_sequence_independently() {
+        let hidden = 2;
+        let seq_len = 3;
+        let data = vec![5.0, 0.0, 9.9, 9.9, 9.9, 9.9, 0.0, 7.0, 9.9, 9.9, 9.9, 9.9];
+
+        let pooled = pool_cls(&data, 2, seq_len, hidden);
+
+        assert!((pooled[0][0] - 1.0).abs() < 1e-6, "first sequence CLS");
+        assert!((pooled[1][1] - 1.0).abs() < 1e-6, "second sequence CLS");
+    }
 
     #[test]
     fn normalize_makes_unit_length() {
