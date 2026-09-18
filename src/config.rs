@@ -201,7 +201,11 @@ pub fn parse(contents: &str) -> Result<AppConfig> {
     ensure_within(&data_dir, &log_path, "paths.log_path")?;
     ensure_within(&data_dir, &cache_dir, "model.cache_dir")?;
 
-    let chunk_tokens = positive(runtime.chunk_tokens, DEFAULT_CHUNK_TOKENS, "runtime.chunk_tokens")?;
+    let chunk_tokens = positive(
+        runtime.chunk_tokens,
+        DEFAULT_CHUNK_TOKENS,
+        "runtime.chunk_tokens",
+    )?;
     let chunk_overlap = runtime.chunk_overlap.unwrap_or(DEFAULT_CHUNK_OVERLAP);
     if chunk_overlap >= chunk_tokens {
         bail!("runtime.chunk_overlap must be smaller than runtime.chunk_tokens.");
@@ -271,7 +275,8 @@ pub fn load(explicit: Option<&Path>) -> Result<AppConfig> {
 
     let contents =
         fs::read_to_string(&path).with_context(|| format!("Cannot read {}", path.display()))?;
-    let config = parse(&contents).with_context(|| format!("Invalid config at {}", path.display()))?;
+    let config =
+        parse(&contents).with_context(|| format!("Invalid config at {}", path.display()))?;
 
     fs::create_dir_all(&config.paths.data_dir)?;
     fs::create_dir_all(&config.model.cache_dir)?;

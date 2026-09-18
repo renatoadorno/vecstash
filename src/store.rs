@@ -312,7 +312,10 @@ pub fn encode_vector(vector: &[f32]) -> Vec<u8> {
 
 pub fn decode_vector(bytes: &[u8]) -> Result<Vec<f32>> {
     if !bytes.len().is_multiple_of(4) {
-        bail!("Corrupt embedding blob: {} bytes is not a multiple of 4", bytes.len());
+        bail!(
+            "Corrupt embedding blob: {} bytes is not a multiple of 4",
+            bytes.len()
+        );
     }
     let mut vector = Vec::with_capacity(bytes.len() / 4);
     for offset in (0..bytes.len()).step_by(4) {
@@ -397,7 +400,9 @@ pub fn cmd_status(config: &AppConfig, format: Format) -> Result<ExitCode> {
             table.add_row(vec!["schema version", &schema_version.to_string()]);
             table.add_row(vec![
                 "vector dim",
-                &vector_dim.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+                &vector_dim
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".into()),
             ]);
             table.add_row(vec!["documents", &documents_count.to_string()]);
             table.add_row(vec!["chunks", &chunks_count.to_string()]);
@@ -486,8 +491,7 @@ pub fn cmd_reset(config: &AppConfig, force: bool, format: Format) -> Result<Exit
 
     let mut deleted: Vec<String> = Vec::new();
     for target in &targets {
-        fs::remove_file(target)
-            .with_context(|| format!("Cannot delete {}", target.display()))?;
+        fs::remove_file(target).with_context(|| format!("Cannot delete {}", target.display()))?;
         deleted.push(target.display().to_string());
     }
 
@@ -496,7 +500,10 @@ pub fn cmd_reset(config: &AppConfig, force: bool, format: Format) -> Result<Exit
             "status": "reset_complete",
             "deleted": deleted,
         }))?,
-        Format::Human => output::print_success(&format!("Reset complete. {} file(s) deleted.", deleted.len())),
+        Format::Human => output::print_success(&format!(
+            "Reset complete. {} file(s) deleted.",
+            deleted.len()
+        )),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -547,17 +554,23 @@ mod tests {
     #[test]
     fn document_roundtrips() {
         let (_dir, store) = open_temp_store();
-        store.upsert_document(&sample_document("doc-1")).expect("upsert");
+        store
+            .upsert_document(&sample_document("doc-1"))
+            .expect("upsert");
         assert_eq!(store.documents_count().expect("count"), 1);
 
-        store.upsert_document(&sample_document("doc-1")).expect("re-upsert");
+        store
+            .upsert_document(&sample_document("doc-1"))
+            .expect("re-upsert");
         assert_eq!(store.documents_count().expect("count"), 1);
     }
 
     #[test]
     fn chunks_are_replaced_not_accumulated() {
         let (_dir, mut store) = open_temp_store();
-        store.upsert_document(&sample_document("doc-1")).expect("upsert");
+        store
+            .upsert_document(&sample_document("doc-1"))
+            .expect("upsert");
 
         let chunks = vec![sample_chunk("doc-1", 0)];
         store
@@ -575,7 +588,9 @@ mod tests {
     #[test]
     fn mismatched_chunk_and_embedding_counts_are_rejected() {
         let (_dir, mut store) = open_temp_store();
-        store.upsert_document(&sample_document("doc-1")).expect("upsert");
+        store
+            .upsert_document(&sample_document("doc-1"))
+            .expect("upsert");
         let err = store
             .replace_chunks("doc-1", &[sample_chunk("doc-1", 0)], &[])
             .expect_err("must reject");
@@ -585,7 +600,9 @@ mod tests {
     #[test]
     fn search_ranks_by_cosine_similarity() {
         let (_dir, mut store) = open_temp_store();
-        store.upsert_document(&sample_document("doc-1")).expect("upsert");
+        store
+            .upsert_document(&sample_document("doc-1"))
+            .expect("upsert");
         let chunks = vec![sample_chunk("doc-1", 0), sample_chunk("doc-1", 1)];
         store
             .replace_chunks("doc-1", &chunks, &[vec![1.0, 0.0], vec![0.0, 1.0]])
@@ -600,7 +617,9 @@ mod tests {
     #[test]
     fn search_respects_top_k() {
         let (_dir, mut store) = open_temp_store();
-        store.upsert_document(&sample_document("doc-1")).expect("upsert");
+        store
+            .upsert_document(&sample_document("doc-1"))
+            .expect("upsert");
         let chunks = vec![sample_chunk("doc-1", 0), sample_chunk("doc-1", 1)];
         store
             .replace_chunks("doc-1", &chunks, &[vec![1.0, 0.0], vec![0.0, 1.0]])
@@ -613,7 +632,9 @@ mod tests {
     #[test]
     fn deleting_document_cascades_to_chunks() {
         let (_dir, mut store) = open_temp_store();
-        store.upsert_document(&sample_document("doc-1")).expect("upsert");
+        store
+            .upsert_document(&sample_document("doc-1"))
+            .expect("upsert");
         store
             .replace_chunks("doc-1", &[sample_chunk("doc-1", 0)], &[vec![1.0, 0.0]])
             .expect("insert");

@@ -4,38 +4,72 @@ on:
   push:
     tags: ["v*"]
 
+env:
+  ASSET_NAME: vecstash-aarch64-apple-darwin
+
 jobs:
   test:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync
-      - run: uv run python -m unittest discover -s tests -p 'test_*.py'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
 
   release:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Verify tag matches Cargo.toml
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          CARGO="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          if [ "$TAG" != "$CARGO" ]; then
+            echo "Tag $TAG does not match Cargo.toml version $CARGO"
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Package with checksum
+        run: |
+          cp "target/aarch64-apple-darwin/release/vecstash" "$ASSET_NAME"
+          shasum -a 256 "$ASSET_NAME" | awk '{print $1"  '"$ASSET_NAME"'"}' > "$ASSET_NAME.sha256"
+
       - name: Generate changelog
         id: changelog
         run: |
-          PREV_TAG=$(git tag --sort=-version:refname | head -2 | tail -1)
-          if [ -z "$PREV_TAG" ]; then
-            CHANGELOG=$(git log --pretty=format:"- %s" HEAD)
+          PREV_TAG="$(git tag --sort=-version:refname | head -2 | tail -1)"
+          if [ "$PREV_TAG" = "$GITHUB_REF_NAME" ] || [ -z "$PREV_TAG" ]; then
+            RANGE="HEAD"
           else
-            CHANGELOG=$(git log --pretty=format:"- %s" ${PREV_TAG}..HEAD)
+            RANGE="$PREV_TAG..HEAD"
           fi
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+          {
+            echo 'changelog<<CHANGELOG_EOF'
+            git log --pretty=format:"- %s" "$RANGE"
+            echo ''
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: softprops/action-gh-release@v2
         with:
           body: ${{ steps.changelog.outputs.changelog }}
           generate_release_notes: false
+          files: |
+            ${{ env.ASSET_NAME }}
+            ${{ env.ASSET_NAME }}.sha256

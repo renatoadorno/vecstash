@@ -30,9 +30,12 @@ fn download_file(config: &AppConfig, file: &str) -> Result<PathBuf> {
         .with_cache_dir(hub_dir(config))
         .build()
         .context("Cannot initialise the HuggingFace client")?;
-    api.repo(repo(config))
-        .get(file)
-        .with_context(|| format!("Cannot download '{file}' for model '{}'", config.model.name.0))
+    api.repo(repo(config)).get(file).with_context(|| {
+        format!(
+            "Cannot download '{file}' for model '{}'",
+            config.model.name.0
+        )
+    })
 }
 
 fn resolve_file(config: &AppConfig, file: &str, offline_only: bool) -> Result<PathBuf> {
@@ -75,7 +78,8 @@ impl Embedder {
             }))
             .map_err(|e| anyhow!("Cannot configure tokenizer truncation: {e}"))?;
 
-        let mut builder = Session::builder().map_err(|e| anyhow!("Cannot create ONNX session builder: {e}"))?;
+        let mut builder =
+            Session::builder().map_err(|e| anyhow!("Cannot create ONNX session builder: {e}"))?;
         builder = match config.model.execution_provider {
             ExecutionProvider::Cpu => builder
                 .with_execution_providers([CPU::default().build()])
@@ -89,9 +93,7 @@ impl Embedder {
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(|e| anyhow!("Cannot set the optimization level: {e}"))?
             .commit_from_file(&model_path)
-            .map_err(|e| {
-                anyhow!("Cannot load ONNX model {}: {e}", model_path.display())
-            })?;
+            .map_err(|e| anyhow!("Cannot load ONNX model {}: {e}", model_path.display()))?;
 
         let mut embedder = Embedder {
             session,
@@ -265,7 +267,10 @@ pub fn cmd_models_show(config: &AppConfig, format: Format) -> Result<ExitCode> {
             table.add_row(vec!["onnx file", &report.onnx_file]);
             table.add_row(vec!["cache dir", &report.cache_dir]);
             table.add_row(vec!["execution provider", &report.execution_provider]);
-            table.add_row(vec!["tokenizer cached", &report.tokenizer_cached.to_string()]);
+            table.add_row(vec![
+                "tokenizer cached",
+                &report.tokenizer_cached.to_string(),
+            ]);
             table.add_row(vec!["model cached", &report.model_cached.to_string()]);
             output::print_line(&table.to_string());
         }
@@ -458,7 +463,10 @@ mod tests {
                 "dimension mismatch for text {index}"
             );
             let similarity = cosine(&actual[index], &expected[index]);
-            println!("text {index}: cosine = {similarity:.6}  |  {}", texts[index]);
+            println!(
+                "text {index}: cosine = {similarity:.6}  |  {}",
+                texts[index]
+            );
             if similarity < worst {
                 worst = similarity;
             }

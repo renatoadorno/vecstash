@@ -469,8 +469,8 @@ mod tests {
 
     #[test]
     fn missing_file_is_reported() {
-        let err = extract_file(Path::new("/tmp/definitely-missing-vecstash.txt"))
-            .expect_err("must fail");
+        let err =
+            extract_file(Path::new("/tmp/definitely-missing-vecstash.txt")).expect_err("must fail");
         assert!(err.to_string().contains("File not found"));
     }
 
@@ -516,14 +516,16 @@ mod tests {
 
     #[test]
     fn html_table_with_headers_becomes_key_value() {
-        let html = "<table><tr><th>name</th><th>value</th></tr><tr><td>a</td><td>1</td></tr></table>";
+        let html =
+            "<table><tr><th>name</th><th>value</th></tr><tr><td>a</td><td>1</td></tr></table>";
         let out = linearize_html_tables(html);
         assert!(out.contains("a: 1"));
     }
 
     #[test]
     fn html_table_without_headers_uses_first_row() {
-        let html = "<table><tr><td>name</td><td>value</td></tr><tr><td>a</td><td>1</td></tr></table>";
+        let html =
+            "<table><tr><td>name</td><td>value</td></tr><tr><td>a</td><td>1</td></tr></table>";
         let out = linearize_html_tables(html);
         assert!(out.contains("a: 1"));
     }
