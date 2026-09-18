@@ -78,28 +78,26 @@ O teste de paridade reprovou com int8 (0,981939) e passou com fp16 (0,999999). O
 - [x] `comfy-table`, `termimad`, `owo-colors`
 - [x] Cores de score preservadas
 - [x] Índice vazio sai com exit 1
-- [ ] Testes de CLI com `assert_cmd` e snapshots `insta`
+- [x] Testes de CLI com `assert_cmd` (16 casos em `tests/cli.rs`)
 
-Validado manualmente no M1 com três documentos reais: 9 chunks, `vector_dim` 1024, e a busca em português devolve os trechos corretos. As dependências de teste estão declaradas, mas os testes de CLI ainda não foram escritos — é a lacuna conhecida desta fase.
+Validado manualmente no M1 com três documentos reais: 9 chunks, `vector_dim` 1024, e a busca em português devolve os trechos corretos. Os testes de CLI cobrem os caminhos que não exigem o modelo baixado; `insta` está declarado mas ainda não é usado, porque as asserções atuais sobre JSON são mais específicas que um snapshot.
 
-## Fase 6 — Distribuição `[~]`
+## Fase 6 — Distribuição `[x]`
 
 - [x] `update` com verificação de SHA-256 (D14)
 - [x] Parsing de versão com `semver`, tratando pré-release
 - [x] `release.yml` construindo binário arm64 com checksum e validação de tag
-- [ ] `clap_complete` para zsh e `clap_mangen` para manpage
+- [x] `clap_complete` para zsh e `clap_mangen` para manpage
 - [x] Reescrever `README.md`, `docs/README.md` e `docs/DEVELOPMENT.md`
 - [x] Reescrever `CLAUDE.md`, corrigindo a afirmação errada sobre validação de paths
-- [ ] Revisão adversarial da branch inteira antes do merge
+- [x] Revisão adversarial da branch inteira antes do merge
 
 ---
 
 ## Pendente antes do merge
 
-1. Testes de CLI com `assert_cmd` e `insta` (Fase 5).
-2. Completions e manpage (Fase 6).
-3. Revisão adversarial da branch.
-4. Exercitar o fluxo de `update` de verdade, o que só é possível depois da primeira release com binário publicado.
+1. Exercitar o fluxo de `update` de verdade, o que só é possível depois da primeira release com binário publicado. O download, a verificação de checksum e o `self_replace` têm testes unitários nas partes puras, mas o caminho de rede nunca rodou ponta a ponta.
+2. Medir CoreML contra CPU no M1. A flag existe e está desligada por padrão; ninguém comparou.
 
 ## Backlog pós-V1
 

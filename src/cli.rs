@@ -1,7 +1,9 @@
 use crate::config::{self, AppConfig};
 use crate::output::{self, Format};
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
+use std::io;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -67,6 +69,15 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+
+    /// Print a shell completion script
+    Completions {
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+
+    /// Print the roff manual page
+    Manpage,
 }
 
 #[derive(Subcommand)]
@@ -93,15 +104,26 @@ pub fn run() -> Result<ExitCode> {
 
     let format = Format::from_flag(json);
 
-    if let Command::Version = command {
-        return version(format);
+    match &command {
+        Command::Version => return version(format),
+        Command::Completions { shell } => return completions(*shell),
+        Command::Manpage => return manpage(),
+        Command::Status
+        | Command::Models { .. }
+        | Command::Ingest { .. }
+        | Command::Search { .. }
+        | Command::Update { .. }
+        | Command::Storage
+        | Command::Reset { .. } => {}
     }
 
     let config = config::load(config_path.as_deref())?;
     crate::logging::init(&config.paths.log_path)?;
 
     match command {
-        Command::Version => unreachable!("handled above"),
+        Command::Version | Command::Completions { .. } | Command::Manpage => {
+            unreachable!("handled above")
+        }
         Command::Status => crate::store::cmd_status(&config, format),
         Command::Storage => crate::store::cmd_storage(&config, format),
         Command::Reset { force } => crate::store::cmd_reset(&config, force, format),
@@ -122,6 +144,18 @@ fn models(config: &AppConfig, command: ModelsCommand, format: Format) -> Result<
         }
         ModelsCommand::Bootstrap => crate::embed::cmd_models_bootstrap(config, format),
     }
+}
+
+fn completions(shell: Shell) -> Result<ExitCode> {
+    let mut command = Cli::command();
+    let name = command.get_name().to_string();
+    clap_complete::generate(shell, &mut command, name, &mut io::stdout());
+    Ok(ExitCode::SUCCESS)
+}
+
+fn manpage() -> Result<ExitCode> {
+    clap_mangen::Man::new(Cli::command()).render(&mut io::stdout())?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn version(format: Format) -> Result<ExitCode> {

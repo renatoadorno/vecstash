@@ -16,8 +16,8 @@ pub fn init(log_path: &Path) -> Result<()> {
         .open(log_path)
         .with_context(|| format!("Cannot open log file {}", log_path.display()))?;
 
-    let filter = EnvFilter::try_from_env("VECSTASH_LOG")
-        .unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
+    let filter =
+        EnvFilter::try_from_env("VECSTASH_LOG").unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
 
     let layer = tracing_subscriber::fmt::layer()
         .json()
