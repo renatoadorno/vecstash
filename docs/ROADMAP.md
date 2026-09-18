@@ -94,10 +94,42 @@ Validado manualmente no M1 com três documentos reais: 9 chunks, `vector_dim` 10
 
 ---
 
+## Revisão adversarial — corrigido
+
+Quatro revisores paralelos (intenção, segurança, performance, contratos) rodaram sobre a branch. Corrigido nesta branch, com teste para cada item:
+
+- **Identidade do documento seguia o conteúdo**, então editar um arquivo criava um documento novo e deixava o antigo órfão no índice para sempre — a busca devolvia as duas versões. `document_id` agora deriva só do caminho. Era um defeito herdado do Python.
+- **`ensure_within` não bloqueava `..`**, porque `Path::starts_with` é léxico. E `model.onnx_file` nunca era validado, chegando cru ao `hf-hub`, cujo `PathBuf::push` com caminho absoluto substitui o destino inteiro.
+- **Sequências de escape ANSI sobreviviam** da extração até o terminal, permitindo que um `.md` de terceiros forjasse ou apagasse resultados na tela.
+- **Contrato do `--json` quebrado** em quatro caminhos de erro, que emitiam texto humano e stdout vazio.
+- **Falhas de extração sumiam do JSON** do `ingest`, e o comando saía com 0 mesmo com o corpus pela metade.
+- **Config e banco da v0.1.x eram aceitos**, produzindo um erro de download incompreensível e um estado contraditório. Agora são recusados com o comando corretivo.
+- **Índice e log eram criados 0644**, com o texto integral dos documentos.
+- **O staging do `update`** usava caminho previsível em `/tmp`, sujeito a symlink attack.
+- **O pooling CLS não tinha rede no CI** — o único teste que o cobria era o de paridade, que é `#[ignore]`. `pool_cls` virou função pura com testes que rodam sempre.
+- Guard de versão de schema, `probe_dimension` preguiçoso, tokenizer por referência, `..` em todos os paths, `fmt --check` no release e smoke test do artefato publicado.
+
 ## Pendente antes do merge
 
 1. Exercitar o fluxo de `update` de verdade, o que só é possível depois da primeira release com binário publicado. O download, a verificação de checksum e o `self_replace` têm testes unitários nas partes puras, mas o caminho de rede nunca rodou ponta a ponta.
 2. Medir CoreML contra CPU no M1. A flag existe e está desligada por padrão; ninguém comparou.
+
+## Achados da revisão não corrigidos
+
+Levantados, avaliados e deixados para depois — nenhum é defeito de correção.
+
+- **Sem trait para o embedder**, então `cmd_ingest` e `cmd_search` não têm teste de caminho feliz. Um `trait TextEmbedder` destravaria um round-trip com dublê determinístico, sem baixar 1,2GB no CI. É o item de maior retorno da lista.
+- **`chunk_with_tokenizer` não é testada** — os 9 testes de chunking cobrem `chunk_with_chars`, que existe só para teste. Uma fixture de `tokenizer.json` mínima resolveria, inclusive assertando que o tokenizer do chunking não tem padding.
+- **Observabilidade quase nula**: há dois eventos `tracing` no binário inteiro, e um erro fatal não deixa rastro no log. Falta `start`/`finish` por comando e um `error!` no `main`.
+- **Batching preso ao documento**: muitos arquivos pequenos viram N forwards de batch 1, sem nunca exercer `max_batch_size`. Acumular os chunks de todos os documentos antes de embedar é uma ordem de grandeza no caso "muitas notas curtas".
+- **`tokenizer.json` (17MB) é parseado duas vezes** por ingestão, uma para o embedder e outra para o chunking.
+- **`GraphOptimizationLevel::Level3` roda do zero** a cada invocação; `with_optimized_model_path` serializa o grafo otimizado, com a chave de cache incluindo EP e versão do ORT.
+- **`max_batch_size = 64` com seq 512** dá um pico de memória desproporcional para 16GB — só a matriz de atenção passa de 1GiB. Vale medir e provavelmente baixar o default, ou trocar por orçamento de tokens.
+- **`Store::search` materializa o corpus inteiro** para devolver `top_k`. Aguenta o volume atual, mas o teto está em torno de 100-200k chunks. Duas passadas com `BinaryHeap` removem o limite.
+- **Erro de config sai com 1, não 2**, embora a doc chame de falha de validação. Os testes de CLI assertam `.failure()` genérico, que aceita qualquer código.
+- **`storage` e `reset` ignoram `~/.vecstash/qdrant/`**, que pode ter centenas de MB órfãos de uma instalação 0.1.x.
+- **Actions em refs mutáveis** e binário e checksum gerados no mesmo job: a verificação SHA-256 dá integridade de transporte, não autenticidade. Pinar por SHA e assinar o artefato (minisign/cosign) fecha isso.
+- **`cargo audit`/`cargo deny` não rodam** no pipeline que publica o binário distribuído por auto-update.
 
 ## Backlog pós-V1
 
