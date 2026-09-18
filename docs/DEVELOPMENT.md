@@ -37,7 +37,11 @@ Como os vetores são normalizados em L2 na geração, o produto interno **é** a
 
 **Vetores em BLOB, não em tabela virtual.** A crate `sqlite-vector-rs` foi avaliada e descartada: a feature `library` não registra o módulo em processo, ela carrega um `.dylib` do disco. Isso quebraria a distribuição por binário único. Com busca exata sobre alguns milhares de chunks, o produto interno em Rust resolve sem dependência nenhuma. Para ANN, o próximo passo é `usearch`, e os metadados não precisam mudar.
 
-**CLS pooling, não mean pooling.** O `bge-m3` usa o token `[CLS]` — o primeiro da sequência — seguido de normalização L2. Usar mean pooling produz vetores plausíveis e silenciosamente errados; o teste de paridade é o que pega isso.
+**CLS pooling, não mean pooling.** O `bge-m3` usa o token `[CLS]` — o primeiro da sequência — seguido de normalização L2. Usar mean pooling produz vetores plausíveis e silenciosamente errados.
+
+Duas redes pegam isso, com alcances diferentes: `pool_cls` é uma função pura com testes unitários que **rodam no CI** e falham se alguém trocar por média; o teste de paridade abaixo prova o pipeline inteiro contra o PyTorch, mas exige o modelo baixado e por isso é `#[ignore]` e **não roda no CI**.
+
+**A identidade do documento é o caminho, não o conteúdo.** `document_id = sha256(source_path)`. Se o hash incluísse o conteúdo, editar um arquivo criaria um documento novo e deixaria o antigo órfão no índice para sempre — a busca passaria a devolver as duas versões. `content_hash` continua existindo como coluna, para detecção de mudança.
 
 **Dois tokenizers.** O `Embedder` configura padding e truncation no seu tokenizer, o que é necessário para o batch do ONNX. O chunking usa um tokenizer separado, sem padding, porque senão o sizer do `text-splitter` contaria os tokens de padding e os chunks sairiam menores que o pedido.
 

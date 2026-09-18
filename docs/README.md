@@ -2,12 +2,14 @@
 
 Manual completo dos comandos. Para instalação e visão geral, veja o [README](../README.md).
 
-Flags globais, válidas em qualquer comando:
+Flags globais:
 
 - `--config <PATH>` — usa outro `config.toml` em vez de `~/.vecstash/config.toml`
-- `--json` — emite uma linha JSON compacta em vez da saída humana
+- `--json` — emite uma linha JSON compacta em vez da saída humana, inclusive nos caminhos de erro
 
-Exit codes: `0` sucesso, `1` erro de execução, `2` falha de validação.
+Exit codes: `0` sucesso, `1` erro de execução ou ingestão parcial, `2` falha de validação de modelo.
+
+**Streams:** toda a saída humana vai para o **stderr**; o **stdout** carrega apenas o JSON do `--json` e os artefatos de `completions` e `manpage`. Isso mantém `vecstash search ... --json | jq` limpo. `completions` e `manpage` ignoram `--json`.
 
 ## ingest
 
@@ -17,11 +19,18 @@ vecstash ingest <arquivo> [arquivo...]
 
 Extrai, divide em chunks, gera embeddings e indexa. Aceita `.txt`, `.md`, `.markdown`, `.html` e `.htm`; qualquer outra extensão é recusada com mensagem explícita.
 
-Os arquivos são extraídos em paralelo. Reingerir o mesmo arquivo substitui os chunks antigos daquele documento, não acumula.
+Os arquivos são extraídos em paralelo. A identidade de um documento é o seu caminho, então reingerir um arquivo — inalterado ou editado — substitui os chunks anteriores em vez de acumular uma segunda cópia.
 
 Se a geração de embeddings falhar para um documento, os metadados ainda são gravados, um aviso vai para o stderr e o campo `indexed` sai como `false` — os demais documentos do lote seguem normalmente.
 
-JSON: lista de objetos com `document_id`, `source_path`, `source_kind`, `chunks`, `indexed`.
+Exit code: `0` quando tudo foi indexado; `1` quando qualquer arquivo falhou na extração ou no embedding, para que `vecstash ingest *.md && ...` não declare sucesso com o corpus pela metade.
+
+JSON: um objeto com duas listas.
+
+```json
+{"indexed":[{"document_id":"…","source_path":"…","source_kind":"md","chunks":3,"indexed":true}],
+ "failed":[{"source_path":"…","error":"Unsupported file type '.csv' for …"}]}
+```
 
 ## search
 
@@ -59,7 +68,9 @@ Tamanho em disco do banco, incluindo os arquivos `-wal` e `-shm` do WAL.
 vecstash reset [--force]
 ```
 
-Apaga o banco e seus arquivos auxiliares. Sem `--force`, lista o que seria apagado e sai com código 1 sem tocar em nada. Não remove os modelos baixados.
+Apaga o banco e seus arquivos auxiliares. Sem `--force`, lista o que seria apagado e sai com código 1 sem tocar em nada — com `--json`, isso vira `{"status":"confirmation_required","targets":[…]}`. Não remove os modelos baixados.
+
+É também o comando a rodar quando o binário recusa um índice criado pelo vecstash 0.1.x: os dados do Python não são migrados.
 
 É o que você roda ao trocar de modelo: a dimensão dos vetores fica gravada no índice e uma divergência é recusada.
 
@@ -97,11 +108,30 @@ Consulta a última release no GitHub e compara com a versão atual usando semver
 
 Com `--check`, apenas informa. Sem a flag, baixa o binário e o `.sha256` correspondente, **verifica o checksum** e só então substitui o executável em execução. Se a release não publicar o arquivo de checksum, a instalação é recusada.
 
+JSON: `action` distingue os três desfechos — `up_to_date`, `checked` ou `installed` —, acompanhado de `current_version`, `latest_version`, `update_available` e `release_url`.
+
 ## version
 
 ```bash
 vecstash version
 ```
+
+## completions
+
+```bash
+vecstash completions zsh > "${fpath[1]}/_vecstash"
+vecstash completions bash > /usr/local/etc/bash_completion.d/vecstash
+```
+
+Aceita `bash`, `zsh`, `fish`, `elvish` e `powershell`. Escreve em stdout.
+
+## manpage
+
+```bash
+vecstash manpage > /usr/local/share/man/man1/vecstash.1
+```
+
+Gera a página de manual em roff, em stdout.
 
 ## Configuração
 

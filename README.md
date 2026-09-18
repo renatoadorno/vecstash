@@ -32,7 +32,9 @@ Todo comando aceita `--json`, que emite uma linha compacta pronta para `jq`:
 vecstash search "prazo de entrega" --json | jq '.[0].source_path'
 ```
 
-Comandos disponíveis: `ingest`, `search`, `status`, `storage`, `reset`, `models show`, `models validate`, `models bootstrap`, `update`, `version`.
+Comandos disponíveis: `ingest`, `search`, `status`, `storage`, `reset`, `models show`, `models validate`, `models bootstrap`, `update`, `version`, `completions`, `manpage`.
+
+A saída humana vai para o stderr e o stdout carrega só o JSON, então `--json | jq` funciona sem filtro extra.
 
 Formatos suportados na ingestão: `.txt`, `.md`, `.markdown`, `.html`, `.htm`. PDF não entra nesta versão.
 
@@ -75,6 +77,19 @@ Todos os caminhos precisam ficar dentro de `paths.data_dir`, e isso é validado 
   models/hub/      cache de modelos, no layout do HuggingFace
   vecstash.log     log JSON, uma linha por evento
 ```
+
+## Vindo da versão 0.1.x (Python)
+
+Os dados não são migrados. O binário recusa, com mensagem explícita, tanto um `config.toml` escrito pela versão Python quanto um `metadata.db` criado por ela. Para migrar:
+
+```bash
+mv ~/.vecstash/config.toml ~/.vecstash/config.toml.bak
+vecstash reset --force
+vecstash models bootstrap
+vecstash ingest <seus arquivos>
+```
+
+O diretório `~/.vecstash/qdrant/` da versão antiga pode ser apagado à mão; o `vecstash` novo não o usa nem o contabiliza.
 
 ## Desenvolvimento
 

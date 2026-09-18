@@ -46,7 +46,7 @@ CI runs those same four checks on `macos-latest`.
 
 ## Traps
 
-- **CLS pooling, not mean pooling.** `bge-m3` pools the first token and then normalises L2. Mean pooling produces plausible, silently wrong vectors. The parity test in `src/embed.rs` is what catches this.
+- **CLS pooling, not mean pooling.** `bge-m3` pools the first token and then normalises L2. Mean pooling produces plausible, silently wrong vectors. `pool_cls` is a pure function with unit tests that run in CI and fail on a switch to mean pooling; the `#[ignore]`d parity test proves the whole pipeline against PyTorch, but needs a downloaded model and does **not** run in CI.
 - **Two tokenizers on purpose.** The one in `Embedder` has padding and truncation configured for ONNX batching. Chunking loads a separate one without padding, otherwise `text-splitter` would count padding tokens and emit undersized chunks.
 - **`dot` is cosine only because vectors are normalised.** `Store::search` computes an inner product. That equals cosine similarity only because embeddings are L2-normalised at generation time. Inserting unnormalised vectors silently corrupts ranking.
 - **`sqlite-vector-rs` was evaluated and rejected.** Its `library` feature loads a `.dylib` from disk rather than registering in-process, which would break single-binary distribution. Vectors are BLOBs in a normal column. For ANN later, use `usearch`; the metadata schema does not need to change.
