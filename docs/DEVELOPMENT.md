@@ -1,129 +1,72 @@
-# vecstash — Development Guide
-
-This guide covers setting up a local development environment, running tests, and understanding the codebase.
-
----
-
-## Prerequisites
-
-- **macOS on Apple Silicon** (M1/M2/M3/M4) — MPS GPU acceleration requires arm64.
-- **Python 3.12+** — pinned via `.python-version`.
-- **uv** — install from [astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) or `brew install uv`.
-
----
+# Desenvolvimento
 
 ## Setup
 
 ```bash
-# Clone the repo
-git clone <repo-url> && cd vecstash
-
-# Install dependencies in a local venv
-uv sync
-
-# Install with MLX backend (optional)
-uv sync --extra mlx
-
-# Install in editable mode (code changes take effect without reinstalling)
-make dev
+cargo build
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
 ```
 
-`make dev` runs `uv tool install -e . --force`, placing `vecstash` and `vecstash-daemon` on `PATH` via `~/.local/bin` while pointing directly at your source tree.
+A CI roda exatamente esses quatro comandos em `macos-latest`.
 
----
+## Mapa dos módulos
 
-## Running Tests
+- `src/main.rs` — entrypoint; converte erro em exit code
+- `src/cli.rs` — árvore de comandos `clap`, flags globais `--config` e `--json`, despacho
+- `src/config.rs` — `AppConfig`, parsing TOML, validação de containment dos paths
+- `src/extract.rs` — extração de `.txt`/`.md`/`.html`, linearização de tabelas, `normalize_text`
+- `src/chunk.rs` — chunking por tokens via `text-splitter` com o tokenizer do modelo
+- `src/embed.rs` — `Embedder` sobre `ort`, cache HuggingFace, comandos `models *`
+- `src/store.rs` — SQLite: schema, upsert, busca exata por cosseno, comandos `status`/`storage`/`reset`
+- `src/pipeline.rs` — `ingest` e `search` ligando extração, chunking, embeddings e storage
+- `src/update.rs` — auto-update por GitHub Releases com verificação de SHA-256
+- `src/output.rs` — JSON compacto e saída humana
+- `src/logging.rs` — `tracing` com layer JSON para arquivo
+
+## Fluxo de dados
+
+**Ingestão:** `extract_file` (em paralelo por `rayon`) produz `ExtractedDocument` → `upsert_document` grava metadados → `chunk_with_tokenizer` divide por tokens → `Embedder::embed` gera vetores → `replace_chunks` substitui os chunks antigos do documento numa transação.
+
+**Busca:** a query é embedada → `Store::search` lê todos os vetores, calcula o produto interno contra a query e ordena → os `top_k` são renderizados.
+
+Como os vetores são normalizados em L2 na geração, o produto interno **é** a similaridade de cosseno. Se algum dia entrarem vetores não normalizados no índice, `dot` deixa de ser cosseno e a ordenação fica errada.
+
+## Decisões que não são óbvias no código
+
+**Vetores em BLOB, não em tabela virtual.** A crate `sqlite-vector-rs` foi avaliada e descartada: a feature `library` não registra o módulo em processo, ela carrega um `.dylib` do disco. Isso quebraria a distribuição por binário único. Com busca exata sobre alguns milhares de chunks, o produto interno em Rust resolve sem dependência nenhuma. Para ANN, o próximo passo é `usearch`, e os metadados não precisam mudar.
+
+**CLS pooling, não mean pooling.** O `bge-m3` usa o token `[CLS]` — o primeiro da sequência — seguido de normalização L2. Usar mean pooling produz vetores plausíveis e silenciosamente errados; o teste de paridade é o que pega isso.
+
+**Dois tokenizers.** O `Embedder` configura padding e truncation no seu tokenizer, o que é necessário para o batch do ONNX. O chunking usa um tokenizer separado, sem padding, porque senão o sizer do `text-splitter` contaria os tokens de padding e os chunks sairiam menores que o pedido.
+
+## Teste de paridade
+
+Confere que os vetores do Rust batem com os do modelo de referência em PyTorch. Precisa do modelo baixado, então é `#[ignore]` por padrão.
 
 ```bash
-# Run all tests
-make test
+# 1. gerar a referência com o ambiente Python legado
+./.venv/bin/python scripts/reference_vectors.py /tmp/reference.json
 
-# Run a single test file
-uv run python -m unittest tests/test_extraction.py
-
-# Run a single test case
-uv run python -m unittest tests.test_cli_models.CliModelsTests.test_models_validate_json
+# 2. rodar a comparação
+VECSTASH_PARITY_CONFIG=~/.vecstash/config.toml \
+VECSTASH_PARITY_REFERENCE=/tmp/reference.json \
+cargo test embeddings_match -- --ignored --nocapture
 ```
 
-Tests use `unittest` with no external test runner required. The test suite covers config loading (including backend parsing), text extraction, storage (SQLite + Qdrant + dimension guard), CLI commands, embedder factory, and daemon preload behaviour.
+O limiar é cosseno > 0,999. Resultados medidos no M1: `model_fp16.onnx` dá 0,999999; `model_quantized.onnx` (int8) dá 0,981939 e **reprova**.
 
-Tests mock `create_embedder` (not the model classes directly) to avoid loading real models.
-
----
-
-## Running the Daemon Locally
+## Release
 
 ```bash
-# Start in foreground (Ctrl+C to stop)
-make daemon
-
-# Test it's responding
-printf '{"jsonrpc":"2.0","id":1,"method":"healthcheck","params":{}}\n' | nc -U ~/.vecstash/daemon.sock
+# 1. bump em Cargo.toml
+# 2. commit
+git tag v0.2.1 && git push && git push --tags
 ```
 
-The daemon writes structured JSON logs to `~/.vecstash/vecstash.log`:
+O workflow valida que a tag bate com a versão do `Cargo.toml`, compila para `aarch64-apple-darwin`, gera o `.sha256` e anexa os dois ao GitHub Release. O comando `update` recusa instalar sem o checksum.
 
-```bash
-tail -f ~/.vecstash/vecstash.log
-```
+## Legado
 
----
-
-## Makefile Targets
-
-| Target | What it does |
-|--------|--------------|
-| `install` | `uv tool install . --force` — installs release binaries |
-| `dev` | `uv tool install -e . --force` — editable install |
-| `uninstall` | Unregisters launchd, then `uv tool uninstall vecstash` |
-| `test` | `uv run python -m unittest discover -s tests` |
-| `bootstrap` | `vecstash models bootstrap` — downloads the embedding model |
-| `status` | `vecstash status` |
-| `daemon` | `vecstash-daemon` — run daemon in foreground |
-| `daemon-stop` | Stops the launchd-managed daemon and removes the socket |
-| `launchd-install` | Registers daemon as a macOS LaunchAgent |
-| `launchd-uninstall` | Removes the LaunchAgent plist |
-| `clean` | Removes `dist/`, `build/`, `__pycache__` |
-
----
-
-## Code Structure
-
-Source lives in `src/vecstash/`. Two entry points are defined in `pyproject.toml`:
-
-- `vecstash` → `vecstash.cli:main`
-- `vecstash-daemon` → `vecstash.daemon:main`
-
-| Module | Role |
-|--------|------|
-| `config.py` | `AppConfig` dataclass (frozen), TOML loading, `ModelConfig.backend` field (`"sentence_transformers"` / `"mlx"`), backend-aware `validate_model_reference()` |
-| `embedder.py` | Multi-backend: `MLXEmbedder`, `SentenceTransformerEmbedder`, `create_embedder()` factory. Lazy loading, `local_files_only=True` at runtime |
-| `extraction.py` | Text extraction from `.txt`, `.md`, `.html`, `.pdf` into `ExtractedDocument`; content hashing; text normalization |
-| `storage.py` | `StorageManager` owns `SQLiteRepository` (metadata + schema migrations) and `QdrantRepository` (vector collection); vector dimension mismatch guard |
-| `daemon.py` | `JsonRpcServer` on a Unix socket; dispatches JSON-RPC 2.0 methods via `JsonRpcHandler` |
-| `rpc.py` | Pure JSON-RPC 2.0 helpers: parse requests, format results/errors |
-| `logging_utils.py` | JSON-structured file logging; extra fields: `command`, `event`, `method`, `client` |
-| `cli.py` | Typer + Rich CLI: `version`, `status`, `storage`, `models`, `ingest`, `search`, `update`, `reset`, `reindex`, `doctor` |
-
-### Embedding backends
-
-The default backend is `sentence_transformers` using `BAAI/bge-m3` (1024-dim, MPS GPU). The `mlx` backend is available as an optional extra (`pip install vecstash[mlx]`).
-
-The `create_embedder(config)` factory reads `config.model.backend` and returns the appropriate embedder class. Both backends implement the same interface: `vector_size` property and `embed(texts)` method.
-
-### Scaffolded commands
-
-`reindex` and `doctor` (CLI and RPC) are defined but return placeholder responses — not yet implemented.
-
----
-
-## Custom Config
-
-Pass `--config` to any command to use a non-default config file:
-
-```bash
-uv run vecstash --config /tmp/test-config.toml status
-uv run vecstash-daemon --config /tmp/test-config.toml
-```
-
-Useful for running isolated test environments without touching `~/.vecstash`.
+`legacy/python/` guarda a implementação em Python (1.700 linhas de fonte, 69 testes) para consulta. Não é compilada nem testada, e não deve receber alterações.

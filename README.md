@@ -1,123 +1,85 @@
 # vecstash
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
-[![macOS ARM](https://img.shields.io/badge/macOS-Apple%20Silicon-black.svg)](https://support.apple.com/en-us/116943)
+Busca semântica local e offline para macOS Apple Silicon. Binário único em Rust, sem Python e sem serviço externo: os vetores e os metadados vivem em um arquivo SQLite, e o modelo de embeddings roda em processo via ONNX Runtime.
 
-Offline semantic storage and search for macOS Apple Silicon — no cloud, no API keys.
+## Requisitos
 
-## Features
+- macOS Apple Silicon (M1 ou superior)
+- Rust 1.90+ para compilar a partir do fonte
 
-- **Fully offline** — embeddings run locally on Apple Silicon (M1/M2/M3/M4)
-- **GPU-accelerated** — default model (`BAAI/bge-m3`) runs via MPS on the Apple GPU
-- **Multi-backend** — `sentence_transformers` (default) or `mlx` as an alternative
-- **Fast local search** — vectors stored in embedded Qdrant, metadata in SQLite
-- **Multiple file formats** — ingest `.txt`, `.md`, `.html`, and `.pdf` files
-- **CLI + background daemon** — one-shot commands or a persistent JSON-RPC 2.0 server over a Unix socket
-- **Auto-managed** — daemon starts on login and restarts on crash via launchd
-
-## Requirements
-
-- macOS on Apple Silicon (M1/M2/M3/M4)
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) (`brew install uv`)
-
-## Installation
+## Instalação
 
 ```bash
-git clone https://github.com/renatoadorno/vecstash.git && cd vecstash
-./install.sh
+git clone https://github.com/renatoadorno/vecstash.git
+cd vecstash
+cargo install --path .
+vecstash models bootstrap
 ```
 
-This checks prerequisites, installs both binaries to `~/.local/bin`, downloads the embedding model (one-time), and sets up launchd for automatic daemon startup.
+O `bootstrap` baixa o modelo (cerca de 1,2GB) para `~/.vecstash/models/hub` e só precisa rodar uma vez.
 
-**Manual install:**
+## Uso
 
 ```bash
-make install        # Install binaries to ~/.local/bin
-make bootstrap      # Download the embedding model
-make launchd-install  # Set up daemon auto-start
+vecstash ingest notas.md relatorio.html leia-me.txt
+vecstash search "como configurar o ambiente" --limit 5
+vecstash status
 ```
 
-**With MLX backend (optional):**
+Todo comando aceita `--json`, que emite uma linha compacta pronta para `jq`:
 
 ```bash
-uv pip install vecstash[mlx]
+vecstash search "prazo de entrega" --json | jq '.[0].source_path'
 ```
 
-Then set `backend = "mlx"` and an MLX model name in `~/.vecstash/config.toml`.
+Comandos disponíveis: `ingest`, `search`, `status`, `storage`, `reset`, `models show`, `models validate`, `models bootstrap`, `update`, `version`.
 
-## Usage
+Formatos suportados na ingestão: `.txt`, `.md`, `.markdown`, `.html`, `.htm`. PDF não entra nesta versão.
 
-### Ingest documents
+## Configuração
 
-Extract and store documents for semantic search:
+O arquivo `~/.vecstash/config.toml` é criado na primeira execução:
 
-```bash
-vecstash ingest report.pdf notes.md design.html
+```toml
+[app]
+name = "vecstash"
 
-# JSON output
-vecstash ingest report.pdf --json
+[model]
+name = "Xenova/bge-m3"
+onnx_file = "onnx/model_fp16.onnx"
+execution_provider = "cpu"
+
+[paths]
+data_dir = "~/.vecstash"
+
+[runtime]
+max_batch_size = 64
+chunk_tokens = 512
+chunk_overlap = 64
 ```
 
-Supported formats: `.txt`, `.md`, `.html`, `.pdf`
+Todos os caminhos precisam ficar dentro de `paths.data_dir`, e isso é validado ao carregar.
 
-### Search
+`execution_provider` aceita `cpu` ou `coreml`. O padrão é `cpu`; `coreml` despacha para o Neural Engine quando os operadores são suportados, e cai de volta para CPU quando não são.
 
-Run a semantic search across all ingested documents:
+`onnx_file` escolhe a variante do modelo. O padrão `onnx/model_fp16.onnx` (1,13GB) reproduz os vetores do modelo de referência com similaridade de cosseno de 0,999999. `onnx/model_quantized.onnx` (570MB) é cerca de duas vezes mais rápido, mas a similaridade cai para 0,982 — bom o suficiente para muitos usos, e insuficiente quando a precisão do ranking importa.
 
-```bash
-# Search with natural language
-vecstash search "how to configure authentication"
+**Trocar de modelo exige reindexar:** rode `vecstash reset` e ingira de novo. A dimensão do índice é gravada na primeira ingestão e divergências são recusadas com mensagem explícita.
 
-# Limit results
-vecstash search "database migrations" --limit 5
+## Armazenamento
 
-# JSON output for scripting
-vecstash search "error handling" --json
+```
+~/.vecstash/
+  config.toml
+  metadata.db      SQLite com documentos, chunks e vetores
+  models/hub/      cache de modelos, no layout do HuggingFace
+  vecstash.log     log JSON, uma linha por evento
 ```
 
-### Utility commands
+## Desenvolvimento
 
-```bash
-vecstash version                       # Show current version
-vecstash status                        # Show configuration and storage status
-vecstash storage                       # Show disk usage of databases
-vecstash models show                   # Show model info and supported architectures
-vecstash models bootstrap              # Download model for offline use
-vecstash reset                         # Delete all indexed data (with confirmation)
-vecstash update --check                # Check for updates
-```
+Veja [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). O histórico da implementação anterior em Python está em `legacy/python/`, preservado apenas para consulta.
 
-### Via daemon (JSON-RPC 2.0)
+## Licença
 
-The daemon exposes the same operations over a Unix socket:
-
-```bash
-# Healthcheck
-printf '{"jsonrpc":"2.0","id":1,"method":"healthcheck","params":{}}\n' \
-  | nc -U ~/.vecstash/daemon.sock
-
-# Search via daemon
-printf '{"jsonrpc":"2.0","id":1,"method":"search","params":{"query":"authentication","top_k":5}}\n' \
-  | nc -U ~/.vecstash/daemon.sock
-```
-
-Uninstall:
-
-```bash
-make uninstall
-```
-
-## Documentation
-
-- [docs/README.md](docs/README.md) — full reference: configuration, CLI commands, daemon protocol, launchd integration, architecture
-- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — contributor guide: setup, tests, Makefile targets, code structure
-
-## Contributing
-
-Contributions are welcome! Please read the [development guide](docs/DEVELOPMENT.md) before submitting a pull request.
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
+MIT. Veja [LICENSE](LICENSE).
