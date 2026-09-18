@@ -283,6 +283,9 @@ pub fn normalize_text(raw: &str) -> String {
                 in_space = true;
                 continue;
             }
+            if character.is_control() {
+                continue;
+            }
             if in_space && !compact.is_empty() {
                 compact.push(' ');
             }
@@ -356,7 +359,7 @@ pub fn extract_file(path: &Path) -> Result<ExtractedDocument> {
     let content_hash = hex::encode(hasher.finalize());
 
     let mut hasher = Sha256::new();
-    hasher.update(format!("{}:{content_hash}", path.display()).as_bytes());
+    hasher.update(path.display().to_string().as_bytes());
     let document_id = hex::encode(hasher.finalize());
 
     let byte_size = fs::metadata(&path)?.len();
@@ -414,6 +417,30 @@ mod tests {
     #[test]
     fn normalize_converts_crlf() {
         assert_eq!(normalize_text("a\r\nb"), "a\nb");
+    }
+
+    #[test]
+    fn normalize_strips_ansi_escape_sequences() {
+        let hostile = "safe\u{1b}[2J\u{1b}[1;31mforged";
+        let cleaned = normalize_text(hostile);
+        assert!(
+            !cleaned.contains('\u{1b}'),
+            "ESC must not survive into indexed text: {cleaned:?}"
+        );
+        assert!(cleaned.contains("safe"));
+    }
+
+    #[test]
+    fn normalize_strips_bell_and_other_control_chars() {
+        let cleaned = normalize_text("a\u{7}b\u{0}c");
+        assert!(!cleaned.contains('\u{7}'));
+        assert!(!cleaned.contains('\u{0}'));
+        assert_eq!(cleaned, "abc");
+    }
+
+    #[test]
+    fn normalize_keeps_newlines() {
+        assert_eq!(normalize_text("a\nb"), "a\nb");
     }
 
     #[test]
@@ -565,5 +592,27 @@ mod tests {
         let doc_b = extract_file(&path_b).expect("extract");
         assert_eq!(doc_a.content_hash, doc_b.content_hash);
         assert_ne!(doc_a.document_id, doc_b.document_id);
+    }
+
+    #[test]
+    fn editing_a_file_keeps_its_document_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("notes.txt");
+
+        fs::write(&path, "first version").expect("write");
+        let before = extract_file(&path).expect("extract");
+
+        fs::write(&path, "second version, quite different").expect("rewrite");
+        let after = extract_file(&path).expect("extract");
+
+        assert_eq!(
+            before.document_id, after.document_id,
+            "document identity must follow the path, otherwise re-ingesting an edited file \
+             leaves the old version orphaned in the index"
+        );
+        assert_ne!(
+            before.content_hash, after.content_hash,
+            "content_hash must still track the content"
+        );
     }
 }

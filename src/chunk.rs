@@ -20,7 +20,8 @@ fn chunk_id(document_id: &str, index: usize) -> String {
 
 fn assemble(document_id: &str, pieces: Vec<&str>) -> Vec<Chunk> {
     let mut chunks = Vec::with_capacity(pieces.len());
-    for (index, piece) in pieces.into_iter().enumerate() {
+    let mut index = 0;
+    for piece in pieces {
         let piece = piece.trim();
         if piece.is_empty() {
             continue;
@@ -31,13 +32,14 @@ fn assemble(document_id: &str, pieces: Vec<&str>) -> Vec<Chunk> {
             text: piece.to_string(),
             chunk_index: index,
         });
+        index += 1;
     }
     chunks
 }
 
 pub fn chunk_with_tokenizer(
     doc: &ExtractedDocument,
-    tokenizer: Tokenizer,
+    tokenizer: &Tokenizer,
     chunk_tokens: usize,
     chunk_overlap: usize,
 ) -> Result<Vec<Chunk>> {

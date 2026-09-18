@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub const DEFAULT_MODEL: &str = "Xenova/bge-m3";
 pub const DEFAULT_ONNX_FILE: &str = "onnx/model_fp16.onnx";
@@ -134,11 +134,40 @@ fn expand(raw: &str) -> Result<PathBuf> {
     Ok(expanded)
 }
 
+fn reject_parent_dir(path: &Path, field: &str) -> Result<()> {
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                bail!("{field} must not contain '..'.");
+            }
+            Component::Normal(_)
+            | Component::CurDir
+            | Component::RootDir
+            | Component::Prefix(_) => {}
+        }
+    }
+    Ok(())
+}
+
 fn ensure_within(base: &Path, target: &Path, field: &str) -> Result<()> {
+    reject_parent_dir(target, field)?;
     if target.starts_with(base) {
         return Ok(());
     }
     Err(anyhow!("{field} must be inside paths.data_dir."))
+}
+
+fn relative_repo_file(value: Option<String>, default: &str, field: &str) -> Result<String> {
+    let value = non_empty(value, default, field)?;
+    for component in Path::new(&value).components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                bail!("{field} must be a relative path inside the model repository, without '..'.");
+            }
+        }
+    }
+    Ok(value)
 }
 
 fn non_empty(value: Option<String>, default: &str, field: &str) -> Result<String> {
@@ -170,7 +199,39 @@ fn parse_provider(value: Option<String>) -> Result<ExecutionProvider> {
     }
 }
 
+const LEGACY_KEYS: [(&str, &str); 6] = [
+    ("model", "backend"),
+    ("model", "preload_on_start"),
+    ("paths", "qdrant_path"),
+    ("paths", "socket_path"),
+    ("runtime", "max_concurrency"),
+    ("runtime", "query_cache_size"),
+];
+
+/// A config written by vecstash 0.1.x parses cleanly here — unknown keys are ignored —
+/// but leaves `model.name` pointing at a PyTorch-only repository, so the first
+/// `models bootstrap` fails with a download error that never mentions the real cause.
+fn reject_legacy_config(contents: &str) -> Result<()> {
+    let Ok(value) = toml::from_str::<toml::Value>(contents) else {
+        return Ok(());
+    };
+    for (section, key) in LEGACY_KEYS {
+        let present = value
+            .get(section)
+            .and_then(|section| section.get(key))
+            .is_some();
+        if present {
+            bail!(
+                "This config was written by vecstash 0.1.x ('{section}.{key}' is no longer used). \
+                 Move it aside and run any command to generate a new one."
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn parse(contents: &str) -> Result<AppConfig> {
+    reject_legacy_config(contents)?;
     let raw: RawConfig = toml::from_str(contents).context("config.toml is not valid TOML")?;
     let RawConfig {
         app,
@@ -217,7 +278,7 @@ pub fn parse(contents: &str) -> Result<AppConfig> {
         },
         model: ModelSection {
             name: ModelId(non_empty(model.name, DEFAULT_MODEL, "model.name")?),
-            onnx_file: non_empty(model.onnx_file, DEFAULT_ONNX_FILE, "model.onnx_file")?,
+            onnx_file: relative_repo_file(model.onnx_file, DEFAULT_ONNX_FILE, "model.onnx_file")?,
             cache_dir,
             execution_provider: parse_provider(model.execution_provider)?,
         },
@@ -278,10 +339,23 @@ pub fn load(explicit: Option<&Path>) -> Result<AppConfig> {
     let config =
         parse(&contents).with_context(|| format!("Invalid config at {}", path.display()))?;
 
-    fs::create_dir_all(&config.paths.data_dir)?;
-    fs::create_dir_all(&config.model.cache_dir)?;
+    create_private_dir(&config.paths.data_dir)?;
+    create_private_dir(&config.model.cache_dir)?;
 
     Ok(config)
+}
+
+/// The data dir holds the full text of every ingested document.
+fn create_private_dir(path: &Path) -> Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    if path.exists() {
+        return Ok(());
+    }
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+        .with_context(|| format!("Cannot create {}", path.display()))
 }
 
 #[cfg(test)]
@@ -340,6 +414,57 @@ mod tests {
         let err = parse("[paths]\ndata_dir = \"/tmp/a\"\n\n[model]\ncache_dir = \"/tmp/b\"\n")
             .expect_err("cache_dir outside data_dir must be rejected");
         assert!(err.to_string().contains("model.cache_dir"));
+    }
+
+    #[test]
+    fn legacy_python_config_is_rejected_with_a_clear_message() {
+        let legacy = "[model]\nname = \"BAAI/bge-m3\"\nbackend = \"sentence_transformers\"\n\n\
+                      [paths]\ndata_dir = \"/tmp/x\"\nqdrant_path = \"/tmp/x/qdrant\"\n";
+        let err = parse(legacy).expect_err("a 0.1.x config must be rejected, not silently ignored");
+        let message = err.to_string();
+        assert!(message.contains("0.1.x"), "message was: {message}");
+        assert!(message.contains("model.backend"), "message was: {message}");
+    }
+
+    #[test]
+    fn legacy_runtime_keys_are_rejected() {
+        let err = parse("[runtime]\nmax_concurrency = 4\n").expect_err("must be rejected");
+        assert!(err.to_string().contains("runtime.max_concurrency"));
+    }
+
+    #[test]
+    fn parent_dir_escape_is_rejected() {
+        let err =
+            parse("[paths]\ndata_dir = \"/tmp/a\"\nsqlite_path = \"/tmp/a/../../etc/x.db\"\n")
+                .expect_err("'..' must not escape data_dir");
+        assert!(err.to_string().contains("paths.sqlite_path"));
+    }
+
+    #[test]
+    fn parent_dir_escape_in_log_path_is_rejected() {
+        let err = parse("[paths]\ndata_dir = \"/tmp/a\"\nlog_path = \"/tmp/a/../../etc/x.log\"\n")
+            .expect_err("'..' must not escape data_dir");
+        assert!(err.to_string().contains("paths.log_path"));
+    }
+
+    #[test]
+    fn absolute_onnx_file_is_rejected() {
+        let err = parse("[model]\nonnx_file = \"/Users/someone/Library/LaunchAgents/x.plist\"\n")
+            .expect_err("onnx_file must be a relative path inside the repo");
+        assert!(err.to_string().contains("model.onnx_file"));
+    }
+
+    #[test]
+    fn onnx_file_with_parent_dir_is_rejected() {
+        let err = parse("[model]\nonnx_file = \"../../../etc/passwd\"\n")
+            .expect_err("onnx_file must not contain '..'");
+        assert!(err.to_string().contains("model.onnx_file"));
+    }
+
+    #[test]
+    fn relative_onnx_file_is_accepted() {
+        let config = parse("[model]\nonnx_file = \"onnx/model_fp16.onnx\"\n").expect("must parse");
+        assert_eq!(config.model.onnx_file, "onnx/model_fp16.onnx");
     }
 
     #[test]
