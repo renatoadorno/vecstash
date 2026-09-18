@@ -1,23 +1,19 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-*.egg-info/
-*.egg
-dist/
-build/
-
-# Virtual environments
-.venv/
-
-# IDE
-.vscode/
-.idea/
+# Rust
+/target/
+**/*.rs.bk
 
 # OS
 .DS_Store
 Thumbs.db
 
+# IDE
+.vscode/
+.idea/
+
 # Claude
 .claude/
+
+# Legacy Python tree
+legacy/**/__pycache__/
+legacy/**/*.py[cod]
+legacy/**/*.egg-info/
